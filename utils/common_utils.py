@@ -7,8 +7,39 @@ import numpy as np
 from PIL import Image
 import PIL
 import numpy as np
+import imageio
 
 import matplotlib.pyplot as plt
+
+def save2img(d_img, fn):
+    d_img = np.clip(d_img.transpose(1, 2, 0),0,1)
+    img = d_img*255.0
+    img = img.astype('uint8')
+    imageio.imwrite(fn, img)
+
+def save2enhanceimg(ori_img, out_img, fn):
+    ori_img = np.clip(ori_img.transpose(1, 2, 0),0,1)
+    out_img = np.clip(out_img.transpose(1, 2, 0),0,1)
+
+    edge_img = np.clip((ori_img-out_img),0,1)
+    en_img = np.clip(edge_img+ori_img,0,1)
+
+    ori_img = ori_img*255.0
+    ori_img = ori_img.astype('uint8')
+    out_img = out_img*255.0
+    out_img = out_img.astype('uint8')
+
+    en_img = en_img*255.0
+    en_img = en_img.astype('uint8')
+
+    imageio.imwrite(fn, en_img)
+
+def rgb2gray(rgb):
+
+    r, g, b = rgb[:,:,0], rgb[:,:,1], rgb[:,:,2]
+    gray = 0.2989 * r + 0.5870 * g + 0.1140 * b
+
+    return np.clip(gray,0,1)
 
 def crop_image(img, d=32):
     '''Make dimensions divisible by `d`'''
@@ -69,6 +100,7 @@ def plot_image_grid(images_np, nrow =8, factor=1, interpolation='lanczos'):
         interpolation: interpolation used in plt.imshow
     """
     n_channels = max(x.shape[0] for x in images_np)
+    print(n_channels)
     assert (n_channels == 3) or (n_channels == 1), "images should have 1 or 3 channels"
     
     images_np = [x if (x.shape[0] == n_channels) else np.concatenate([x, x, x], axis=0) for x in images_np]
@@ -81,10 +113,10 @@ def plot_image_grid(images_np, nrow =8, factor=1, interpolation='lanczos'):
         plt.imshow(grid[0], cmap='gray', interpolation=interpolation)
     else:
         plt.imshow(grid.transpose(1, 2, 0), interpolation=interpolation)
-    
+        
     plt.show()
     
-    return grid
+    return plt
 
 def load(path):
     """Load PIL image."""
@@ -141,7 +173,16 @@ def get_noise(input_depth, method, spatial_size, noise_type='u', var=1./10):
         net_input = torch.zeros(shape)
         
         fill_noise(net_input, noise_type)
-        net_input *= var            
+        net_input *= var
+    elif method == 'fourier':
+        shape = [1, input_depth//2, spatial_size[0], spatial_size[1]]
+        net_input = torch.zeros(shape)
+        
+        fill_noise(net_input, noise_type)
+        net_input *= var
+        
+        net_input = torch.cat([torch.sin(2.*np.pi*net_input), torch.cos(2.*np.pi*net_input)], 1)
+                    
     elif method == 'meshgrid': 
         assert input_depth == 2
         X, Y = np.meshgrid(np.arange(0, spatial_size[1])/float(spatial_size[1]-1), np.arange(0, spatial_size[0])/float(spatial_size[0]-1))
@@ -230,3 +271,15 @@ def optimize(optimizer_type, parameters, closure, LR, num_iter):
             optimizer.step()
     else:
         assert False
+
+def get_noisy_image(img_np, sigma):
+    """Adds Gaussian noise to an image.
+
+    Args:
+        img_np: image, np.array with values from 0 to 1
+        sigma: std of the noise
+    """
+    img_noisy_np = np.clip(img_np + np.random.normal(scale=sigma, size=img_np.shape), 0, 1).astype(np.float32)
+    img_noisy_pil = np_to_pil(img_noisy_np)
+
+    return img_noisy_pil, img_noisy_np
