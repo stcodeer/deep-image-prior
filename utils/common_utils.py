@@ -10,6 +10,7 @@ import numpy as np
 import imageio
 
 import matplotlib.pyplot as plt
+from utils.warmup_scheduler import GradualWarmupScheduler
 
 def save2img(d_img, fn):
     d_img = np.clip(d_img.transpose(1, 2, 0),0,1)
@@ -90,7 +91,7 @@ def get_image_grid(images_np, nrow=8):
     
     return torch_grid.numpy()
 
-def plot_image_grid(images_np, nrow =8, factor=1, interpolation='lanczos'):
+def plot_image_grid(images_np, nrow=8, factor=1, interpolation='lanczos', plot=False, save_path='default'):
     """Draws images in a grid
     
     Args:
@@ -100,7 +101,6 @@ def plot_image_grid(images_np, nrow =8, factor=1, interpolation='lanczos'):
         interpolation: interpolation used in plt.imshow
     """
     n_channels = max(x.shape[0] for x in images_np)
-    print(n_channels)
     assert (n_channels == 3) or (n_channels == 1), "images should have 1 or 3 channels"
     
     images_np = [x if (x.shape[0] == n_channels) else np.concatenate([x, x, x], axis=0) for x in images_np]
@@ -113,10 +113,13 @@ def plot_image_grid(images_np, nrow =8, factor=1, interpolation='lanczos'):
         plt.imshow(grid[0], cmap='gray', interpolation=interpolation)
     else:
         plt.imshow(grid.transpose(1, 2, 0), interpolation=interpolation)
-        
-    plt.show()
-    
-    return plt
+    if not save_path == 'default': 
+        plt.savefig(save_path)
+    if plot:
+        print("plotting...")
+        plt.show()
+    plt.close()
+    return grid
 
 def load(path):
     """Load PIL image."""
@@ -236,7 +239,7 @@ def torch_to_np(img_var):
     return img_var.detach().cpu().numpy()[0]
 
 
-def optimize(optimizer_type, parameters, closure, LR, num_iter):
+def optimize(optimizer_type, parameters, closure, LR, num_iter, LR_min=1e-6):
     """Runs optimization loop.
 
     Args:
@@ -269,6 +272,23 @@ def optimize(optimizer_type, parameters, closure, LR, num_iter):
             optimizer.zero_grad()
             closure()
             optimizer.step()
+    
+    elif optimizer_type == 'adam_gradual_warmup':
+        print('Starting optimization with ADAM Gradual Warmup')
+        optimizer = torch.optim.Adam(parameters, lr=LR)
+        
+        ## Scheduler (Strategy)
+        warmup_epochs = 300
+        scheduler_cosine = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, num_iter-warmup_epochs, eta_min=LR_min)
+        scheduler = GradualWarmupScheduler(optimizer, multiplier=1, total_epoch=warmup_epochs, after_scheduler=scheduler_cosine)
+        # scheduler.step()
+        
+        for j in range(num_iter):
+            optimizer.zero_grad()
+            closure()
+            optimizer.step()
+            scheduler.step()
+        
     else:
         assert False
 

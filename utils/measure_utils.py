@@ -149,7 +149,7 @@ def MLVMap(im):
     return dd
 
 def MLVSharpnessMeasure(im):
-    T=1000;
+    T=1000
     alpha=-0.01
 
     im_map = MLVMap(im)

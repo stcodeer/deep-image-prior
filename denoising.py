@@ -15,7 +15,9 @@ os.environ['CUDA_VISIBLE_DEVICES'] = '0' # run on GPU
 import numpy as np
 from models import *
 from models.ViT import ViT
-from models.swin_transformer import SwinTransformer
+from models.swin_transformer import SwinUnet
+from models.swin_transformer_2 import SwinUnet2
+from models.swin_transformer_2_decoder import Swin2Decoder
 from models.inception_transformer import iformer_small, iformer_base, iformer_large
 
 import torch
@@ -32,30 +34,46 @@ torch.backends.cudnn.benchmark =True
 # dtype = torch.FloatTensor # run on CPU
 dtype = torch.cuda.FloatTensor # run on GPU
 
-imsize =-1
-PLOT = True
-sigma = 25
-sigma_ = sigma/255.
-
+# hyperparameter
 img_name = 'F16_GT'
-
-# denoising
 fname = 'data/denoising/%s.png'%img_name
 
-NET_TYPE = 'skip' # one of skip|ViT|Swin|iformer_small|iformer_base|iformer_large
+NET_TYPE = 'SwinUnet2' # one of skip|ViT|SwinUnet|SwinUnet2|Swin2Decoder|iformer_small|iformer_base|iformer_large
 
-exp_num = 0
+exp_name = '_noskip_no33_nopixel'
+
+num_iter = 50000
+
+INPUT = 'noise' # 'noise', meshgrid', 'fourier'
+pad = 'reflection'
+OPT_OVER = 'net' # 'net,input'
+
+imsize =-1
+PLOT = False
+sigma = 25
+sigma_ = sigma/255.
+reg_noise_std = 1./30. # set to 1./20. for sigma=50
+OPTIMIZER='adam' # 'adam', 'LBFGS', 'adam_gradual_warmup'
+show_every = 100
+exp_weight = 0.99
+
+# output path
 
 if not os.path.exists('outputs'):
         os.mkdir('outputs')
 
-file_name = 'outputs/' + img_name + '_' + NET_TYPE + '_' + str(exp_num)
+file_name = 'outputs/' + img_name + '_' + NET_TYPE + '_' + str(num_iter) + '_' + INPUT + exp_name
+
+print(file_name)
 
 if not os.path.exists(file_name):
         os.mkdir(file_name)
 
 log_path = file_name + '/logs_%s.txt'%img_name
 log_file = open(log_path, "w")
+
+result_path = file_name + '/result_%s.txt'%img_name
+result_file = open(result_path, "w")
 
 # load data
 
@@ -67,31 +85,22 @@ if fname == 'data/denoising/snail.jpg':
     img_pil = img_noisy_pil
     img_np = img_noisy_np
     
-    if PLOT:
-        plot_image_grid([img_np], 4, 5)
+    plot_image_grid([img_np], 4, 5, plot=PLOT)
         
 elif fname == 'data/denoising/F16_GT.png':
     # Add synthetic noise
     img_pil = crop_image(get_image(fname, imsize)[0], d=32)
+    # img_pil = img_pil.crop((0, 0, 256, 256))
     img_np = pil_to_np(img_pil)
     
     img_noisy_pil, img_noisy_np = get_noisy_image(img_np, sigma_)
     
-    if PLOT:
-        plot_image_grid([img_np, img_noisy_np], 4, 6)
+    plot_image_grid([img_np, img_noisy_np], 4, 6, plot=PLOT)
 else:
     assert False
 print(img_np.shape)
 
-INPUT = 'noise' # 'meshgrid'
-pad = 'reflection'
-OPT_OVER = 'net' # 'net,input'
 
-reg_noise_std = 1./30. # set to 1./20. for sigma=50
-
-OPTIMIZER='adam' # 'LBFGS'
-show_every = 100
-exp_weight=0.99
 
 # if fname == 'data/denoising/snail.jpg':
 #     num_iter = 2400
@@ -111,8 +120,10 @@ exp_weight=0.99
 #     LR = 0.01
 
 if fname == 'data/denoising/F16_GT.png':
-    num_iter = 5000
+    
     figsize = 4
+    LR_min = 0
+    
     if NET_TYPE == 'skip':
         input_depth = 32 # should be 32
         
@@ -123,32 +134,39 @@ if fname == 'data/denoising/F16_GT.png':
                     num_scales=5,
                     upsample_mode='bilinear').type(dtype)
         
-        LR = 0.01
+        LR = 1e-2
         
     elif NET_TYPE == 'ViT':
         input_depth = 3
     
         net = ViT(depth=6, img_hsize=img_np.shape[1], img_wsize=img_np.shape[2]).type(dtype)
         
-        LR = 0.001
+        LR = 1e-3
     
-    elif NET_TYPE == 'Swin':
-        input_depth = 3
+    elif NET_TYPE[0:4] == 'Swin':
+        if NET_TYPE =='Swin2Decoder':
+            input_depth = 768
+        else:
+            input_depth = 32
         
-        net = SwinTransformer(img_size=(img_np.shape[1], img_np.shape[2]), 
-                            window_size=16, 
-                            embed_dim=96, 
-                            drop_rate=0.0, 
-                            attn_drop_rate=0.0).type(dtype)
+        net = locals()[NET_TYPE](img_size=img_np.shape[1],
+                        in_chans=input_depth,
+                        out_chans=3,
+                        window_size=16,
+                        ).type(dtype)
         
-        LR = 0.001
+        if OPTIMIZER == 'adam_gradual_warmup':
+            LR = 5e-5
+            LR_min = 1e-6
+        else:
+            LR = 5e-5
         
     elif NET_TYPE[0:7] == 'iformer':
         input_depth = 32
         
         net = locals()[NET_TYPE](in_chans=input_depth, img_size=(img_np.shape[1], img_np.shape[2])).type(dtype)
         
-        LR = 0.002
+        LR = 1e-5
     
     else:
         assert False
@@ -156,10 +174,14 @@ if fname == 'data/denoising/F16_GT.png':
 else:
     assert False
     
-net_input = get_noise(input_depth, INPUT, (img_pil.size[1], img_pil.size[0])).type(dtype).detach() # 这个地方会不会在长宽不等的时候弄反？
+if NET_TYPE == 'SwinDecoder':
+    net_input = get_noise(input_depth, INPUT, (img_pil.size[1]//32, img_pil.size[0]//32)).type(dtype).detach()
+else:
+    net_input = get_noise(input_depth, INPUT, (img_pil.size[1], img_pil.size[0])).type(dtype).detach()
 
-# net_input_np = torch_to_np(net_input)
-# plot_image_grid([np.clip(net_input_np, 0, 1)], factor=figsize, nrow=1)
+net_input_np = torch_to_np(net_input)
+# if input_depth == 1 or input_depth == 3:
+#     plot_image_grid([np.clip(net_input_np, 0, 1)], factor=figsize, nrow=1, plot=PLOT, save_path=file_name+'/noise.png')
 
 # Compute number of parameters
 s  = sum([np.prod(list(p.size())) for p in net.parameters()]); 
@@ -175,11 +197,14 @@ noise = net_input.detach().clone()
 out_avg = None
 last_net = None
 psrn_noisy_last = 0
+max_psnr = 0
+best_iteration = 0
 
 i = 0
 def closure():
     
     global i, out, out_avg, psrn_noisy_last, last_net, net_input
+    global max_psnr, best_iteration
     
     if reg_noise_std > 0:
         net_input = net_input_saved + (noise.normal_() * reg_noise_std)
@@ -187,10 +212,7 @@ def closure():
     out = net(net_input)
     
     if NET_TYPE == 'ViT':
-        out = torch.reshape(out, (1, input_depth, img_np.shape[1], img_np.shape[2]))
-    
-    # if NET_TYPE == 'Swin':
-    #     dosomething
+        out = torch.reshape(out, (1, input_depth, img_np.shape[1], img_np.shape[2])) # 放到 ViT 里
     
     # print(out.shape)
     
@@ -206,11 +228,14 @@ def closure():
             
     total_loss = mse(out, img_noisy_torch)
     total_loss.backward()
-        
     
     psrn_noisy = compare_psnr(img_noisy_np, out.detach().cpu().numpy()[0]) 
     psrn_gt    = compare_psnr(img_np, out.detach().cpu().numpy()[0]) 
     psrn_gt_sm = compare_psnr(img_np, out_avg.detach().cpu().numpy()[0]) 
+    
+    if psrn_gt > max_psnr:
+        max_psnr = psrn_gt
+        best_iteration = i
     
     pre_img = out.detach().cpu().numpy()[0]
     pre_img = pre_img.transpose(1, 2, 0)
@@ -220,7 +245,7 @@ def closure():
     avg_mask_it = get_circular_statastic(pre_img, noisy_img,  size=0.2)
     
     #automatic stopping
-    blur_it = PerceptualBlurMetric (pre_img)#the blurriness of the output image
+    blur_it = PerceptualBlurMetric(pre_img)#the blurriness of the output image
     sharp_it = MLVSharpnessMeasure(pre_img)#the sharpness of the output image
     ratio_it = blur_it/sharp_it#the ratio
     
@@ -229,40 +254,44 @@ def closure():
     print ('Iteration %05d    Loss %f   PSNR_noisy: %f   PSRN_gt: %f PSNR_gt_sm: %f' % (i, total_loss.item(), psrn_noisy, psrn_gt, psrn_gt_sm), '\r', end='')
     log_file.write('Iteration: %05d, Loss: %f, PSRN_gt: %f, mask: %s, ratio: %f\n' % (i, total_loss.item(), psrn_gt, avg_mask_it, ratio_it))
     log_file.flush()
-    if  PLOT and i % show_every == 0:
+    if  i <= 5000 and i % show_every == 0:
         out_np = torch_to_np(out)
-        plt = plot_image_grid([np.clip(out_np, 0, 1),
-                         np.clip(torch_to_np(out_avg), 0, 1)], factor=figsize, nrow=1)
-        plt.savefig(file_name+'/denoising_%s.png'%str(i))
+        plot_image_grid([np.clip(out_np, 0, 1), np.clip(torch_to_np(out_avg), 0, 1)], factor=figsize, nrow=1, plot=PLOT, save_path=file_name+'/denoising_%s.png'%str(i))
         
         
     
     # Backtracking
-    # if i % show_every:
-    #     if psrn_noisy - psrn_noisy_last < -5: 
-    #         print('Falling back to previous checkpoint.')
+    if i % show_every:
+        if psrn_noisy - psrn_noisy_last < -5: 
+            print('Falling back to previous checkpoint.')
 
-    #         for new_param, net_param in zip(last_net, net.parameters()):
-    #             net_param.data.copy_(new_param.cuda())
+            for new_param, net_param in zip(last_net, net.parameters()):
+                net_param.data.copy_(new_param.cuda())
 
-    #         return total_loss*0
-    #     else:
-    #         last_net = [x.detach().cpu() for x in net.parameters()]
-    #         psrn_noisy_last = psrn_noisy
+            return total_loss*0
+        else:
+            last_net = [x.detach().cpu() for x in net.parameters()]
+            psrn_noisy_last = psrn_noisy
             
     i += 1
 
     return total_loss
 
 p = get_params(OPT_OVER, net, net_input)
-optimize(OPTIMIZER, p, closure, LR, num_iter)
+optimize(OPTIMIZER, p, closure, LR, num_iter, LR_min)
+
 log_file.close()
+result_file.write('Max PSNR: '+str(max_psnr)+'\n')
+result_file.write('Best Iteration: '+str(best_iteration)+'\n')
+result_file.close()
 
 out_np = torch_to_np(out)
-plt = plot_image_grid([np.clip(out_np, 0, 1), img_np], factor=13)
-plt.savefig(file_name+'/%s_denoised.png'%img_name) # save the denoised image
+plot_image_grid([np.clip(out_np, 0, 1), img_np], factor=13, plot=PLOT, save_path=file_name+'/%s_denoised.png'%img_name) # save the denoised image
 
-frequency_lists, psnr_list, ratio_list = get_log_data(log_path)
+loss_list, frequency_lists, psnr_list, ratio_list = get_log_data(log_path)
+
+get_loss_fig(loss_list, num_iter, ylim=0.05, save_path=file_name+'/%s_loss.png'%img_name) # save the loss figure
+
 get_fbc_fig(frequency_lists, num_iter, ylim=1, save_path=file_name+'/%s_fbc.png'%img_name) # save the fbc figure
 
 data_lists =[]

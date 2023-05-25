@@ -33,7 +33,6 @@ from timm.models.registry import register_model
 from torch.nn.init import _calculate_fan_in_and_fan_out
 import math
 import warnings
-from timm.models.layers.helpers import to_2tuple
 
 
 _logger = logging.getLogger(__name__)
@@ -197,6 +196,7 @@ class PatchDeEmbed(nn.Module):
     def __init__(self, in_chans, embed_dim):
         super().__init__()
         
+        self.upsample = nn.Upsample(scale_factor=2, mode='bilinear')
         self.proj = nn.Linear(in_chans, embed_dim, bias=False)
         # self.norm = nn.BatchNorm2d(embed_dim)
         
@@ -207,7 +207,7 @@ class PatchDeEmbed(nn.Module):
     def forward(self, x):
         # B, C, H, W = x.shape
         
-        x = nn.functional.interpolate(x, scale_factor=(2, 2), mode='bilinear')
+        x = self.upsample(x)
         x = x.permute(0,2,3,1)
         x = self.proj(x)
         # x = x.permute(0,3,1,2)
@@ -225,6 +225,7 @@ class FinalPatchDeEmbed(nn.Module):
     def __init__(self, in_chans, embed_dim):
         super().__init__()
         
+        self.upsample = nn.Upsample(scale_factor=4, mode='bilinear')
         self.proj = nn.Linear(in_chans, embed_dim, bias=False)
         # self.norm = nn.BatchNorm2d(embed_dim)
         
@@ -238,7 +239,7 @@ class FinalPatchDeEmbed(nn.Module):
     def forward(self, x):
         # B, C, H, W = x.shape
         
-        x = nn.functional.interpolate(x, scale_factor=(4, 4), mode='bilinear')
+        x = self.upsample(x)
         x = x.permute(0,2,3,1)
         x = self.proj(x)
         # x = x.permute(0,3,1,2)
