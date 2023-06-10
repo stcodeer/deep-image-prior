@@ -4,6 +4,26 @@ import re
 
 plt.rcParams.update({'font.size': 18})
 
+def get_log2_data(file_name):
+    file1 = open(file_name, 'r')
+    Lines = file1.readlines()
+    file1.close()
+    
+    frequency_lists = []
+    
+    for line in Lines:
+        strings = re.split('\[|\]|,\s', line.strip())
+        
+        fre_list = []
+        
+        for i in range(1, 6):
+            fre_list.append(float(strings[i]))
+            
+        frequency_lists.append(np.array(fre_list))
+        
+    return frequency_lists
+
+
 def get_log_data(file_name):
     file1 = open(file_name, 'r')
     Lines = file1.readlines()

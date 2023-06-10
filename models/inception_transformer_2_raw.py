@@ -33,6 +33,7 @@ from timm.models.registry import register_model
 from torch.nn.init import _calculate_fan_in_and_fan_out
 import math
 import warnings
+from timm.models.layers.helpers import to_2tuple
 
 
 _logger = logging.getLogger(__name__)
@@ -41,7 +42,7 @@ _logger = logging.getLogger(__name__)
 def _cfg(url='', **kwargs):
     return {
         'url': url,
-        'pool_size': None,
+        'num_classes': 1000, 'input_size': (3, 224, 224), 'pool_size': None,
         'crop_pct': .9, 'interpolation': 'bicubic', 'fixed_input_size': True,
         'mean': IMAGENET_DEFAULT_MEAN, 'std': IMAGENET_DEFAULT_STD,
         'first_conv': 'patch_embed.proj', 'classifier': 'head',
@@ -149,10 +150,14 @@ def lecun_normal_(tensor):
 class PatchEmbed(nn.Module):
     """ 2D Image to Patch Embedding
     """
-    def __init__(self, in_chans, embed_dim):
+    def __init__(self, img_size=224, kernel_size=16,  stride=16, padding=0, in_chans=3, embed_dim=768):
         super().__init__()
+        kernel_size = to_2tuple(kernel_size)
+        stride = to_2tuple(stride)
+        padding = to_2tuple(padding)
         
-        self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=3, stride=2, padding=1)
+        
+        self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=kernel_size, stride=stride, padding=padding )
         self.norm = nn.BatchNorm2d(embed_dim)
 
     def forward(self, x):
@@ -165,13 +170,13 @@ class PatchEmbed(nn.Module):
 class FirstPatchEmbed(nn.Module):
     """ 2D Image to Patch Embedding
     """
-    def __init__(self, in_chans, embed_dim):
+    def __init__(self, kernel_size=3,  stride=2, padding=1, in_chans=3, embed_dim=768):
         super().__init__()
         
-        self.proj1 = nn.Conv2d(in_chans, embed_dim//2, kernel_size=3, stride=2, padding=1)
+        self.proj1 = nn.Conv2d(in_chans, embed_dim//2, kernel_size=kernel_size, stride=stride, padding=padding )
         self.norm1 = nn.BatchNorm2d(embed_dim // 2)
         self.gelu1 = nn.GELU()
-        self.proj2 = nn.Conv2d(embed_dim//2, embed_dim, kernel_size=3, stride=2, padding=1)
+        self.proj2 = nn.Conv2d(embed_dim//2, embed_dim, kernel_size=kernel_size, stride=stride, padding=padding )
         self.norm2 = nn.BatchNorm2d(embed_dim)
         
     def forward(self, x):
@@ -183,58 +188,6 @@ class FirstPatchEmbed(nn.Module):
         x = self.norm2(x)    
         x = x.permute(0,2,3,1)
         return x
-
-
-# Dual up-sample
-class PatchDeEmbed(nn.Module):
-    def __init__(self, in_chans, embed_dim):
-        super(PatchDeEmbed, self).__init__()
-        self.up_p = nn.Sequential(nn.Conv2d(in_chans, 4*embed_dim, 1, 1, 0, bias=False),
-                                    nn.PReLU(),
-                                    nn.PixelShuffle(2),
-                                    nn.Conv2d(embed_dim, embed_dim, 1, stride=1, padding=0, bias=False))
-
-        self.up_b = nn.Sequential(nn.Conv2d(in_chans, 2*embed_dim, 1, 1, 0),
-                                    nn.PReLU(),
-                                    nn.Upsample(scale_factor=2, mode='bilinear'),
-                                    nn.Conv2d(2*embed_dim, embed_dim, 1, stride=1, padding=0, bias=False))
-        
-        self.conv = nn.Conv2d(2*embed_dim, embed_dim, 1, 1, 0, bias=False)
-
-    def forward(self, x):
-        # B, C, H, W = x.shape
-        
-        x_p = self.up_p(x)  # pixel shuffle
-        x_b = self.up_b(x)  # bilinear
-        out = self.conv(torch.cat([x_p, x_b], dim=1))
-        out = out.permute(0, 2, 3, 1)  # B, H, W, C
-
-        return out
-
-class FinalPatchDeEmbed(nn.Module):
-    def __init__(self, in_chans, embed_dim):
-        super(FinalPatchDeEmbed, self).__init__()
-        self.up_p = nn.Sequential(nn.Conv2d(in_chans, 16*embed_dim, 1, 1, 0, bias=False),
-                                    nn.PReLU(),
-                                    nn.PixelShuffle(4),
-                                    nn.Conv2d(embed_dim, embed_dim, 1, stride=1, padding=0, bias=False))
-
-        self.up_b = nn.Sequential(nn.Conv2d(in_chans, embed_dim, 1, 1, 0),
-                                    nn.PReLU(),
-                                    nn.Upsample(scale_factor=4, mode='bilinear'),
-                                    nn.Conv2d(embed_dim, embed_dim, 1, stride=1, padding=0, bias=False))
-        
-        self.conv = nn.Conv2d(2*embed_dim, embed_dim, 1, 1, 0, bias=False)
-
-    def forward(self, x):
-        # B, C, H, W = x.shape
-        
-        x_p = self.up_p(x)  # pixel shuffle
-        x_b = self.up_b(x)  # bilinear
-        out = self.conv(torch.cat([x_p, x_b], dim=1))
-        out = out.permute(0, 2, 3, 1)  # B, H, W, C
-
-        return out
 
 class HighMixer(nn.Module):
     def __init__(self, dim, kernel_size=3, stride=1, padding=1,
@@ -378,132 +331,77 @@ class Block(nn.Module):
         return x
 
 class InceptionTransformer(nn.Module):
-    def __init__(self, img_size=224, patch_size=16, in_chans=3, out_chans=3, embed_dims=None, depths=None,
+    def __init__(self, img_size=224, patch_size=16, in_chans=3, num_classes=1000, embed_dims=None, depths=None,
                  num_heads=None, mlp_ratio=4., qkv_bias=True, 
-                 drop_rate=0., attn_drop_rate=0., drop_path_rate=0.1, embed_layer=PatchEmbed, de_embed_layer=PatchDeEmbed, norm_layer=None,
+                 drop_rate=0., attn_drop_rate=0., drop_path_rate=0., embed_layer=PatchEmbed, norm_layer=None,
                  act_layer=None, weight_init='',
                  attention_heads=None,
                  use_layer_scale=False, layer_scale_init_value=1e-5, 
                  checkpoint_path=None,
                  **kwargs, 
                  ):
+        
         super().__init__()
-        
-        tmplen = len(depths)
-        for i in range(tmplen - 2, -1, -1):
-            depths.append(depths[i])
-            
-        st_idx = [0, 0] 
-        for i in range(1, len(depths) + 1):
-            st_idx.append(sum(depths[:i]))
+        st2_idx = sum(depths[:1])
+        st3_idx = sum(depths[:2])
+        st4_idx = sum(depths[:3])
         depth = sum(depths)
-        assert depth == st_idx[8], "Length of depths is not 8"
         
-        for i in range(sum(depths[:3]) - 1, -1, -1):
-            attention_heads.append(attention_heads[i])
+        self.num_classes = num_classes
         
         norm_layer = norm_layer or partial(nn.LayerNorm, eps=1e-6)
         act_layer = act_layer or nn.GELU
         
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]  # stochastic depth decay rule
         
-        self.conv_first = nn.Conv2d(in_chans, embed_dims[0], 3, 1, 1) # 3*3 conv2d kernel
-        
-        self.patch_embed = FirstPatchEmbed(in_chans=embed_dims[0], embed_dim=embed_dims[0]) # 3*3 conv2d kernel
-        
-        if isinstance(img_size, int):
-            img_size = (img_size, img_size)
-            
-        self.num_patches1 = num_patches = (img_size[0] // 4, img_size[1] // 4)
-        self.pos_embed1 = nn.Parameter(torch.zeros(1, num_patches[0], num_patches[1], embed_dims[0]))
+        self.patch_embed = FirstPatchEmbed(in_chans=in_chans, embed_dim=embed_dims[0])
+        self.num_patches1 = num_patches = img_size // 4
+        self.pos_embed1 = nn.Parameter(torch.zeros(1, num_patches, num_patches, embed_dims[0]))
         self.blocks1 = nn.Sequential(*[
             Block(
                 dim=embed_dims[0], num_heads=num_heads[0], mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, drop=drop_rate,
                 attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer, act_layer=act_layer, attention_head=attention_heads[i], pool_size=2,)
                 # use_layer_scale=use_layer_scale, layer_scale_init_value=layer_scale_init_value, 
                 # )
-            for i in range(0, st_idx[2])])
+            for i in range(0, st2_idx)])
 
 
-        self.patch_embed2 = embed_layer(in_chans=embed_dims[0], embed_dim=embed_dims[1])
-        self.num_patches2 = num_patches = (num_patches[0] // 2, num_patches[1] // 2)
-        self.pos_embed2 = nn.Parameter(torch.zeros(1, num_patches[0], num_patches[1], embed_dims[1]))
+        self.patch_embed2 = embed_layer(kernel_size=3, stride=2, padding=1, in_chans=embed_dims[0], embed_dim=embed_dims[1])
+        self.num_patches2 = num_patches = num_patches // 2
+        self.pos_embed2 = nn.Parameter(torch.zeros(1, num_patches, num_patches, embed_dims[1]))
         self.blocks2 = nn.Sequential(*[
             Block(
                 dim=embed_dims[1], num_heads=num_heads[1], mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, drop=drop_rate,
                 attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer, act_layer=act_layer, attention_head=attention_heads[i], pool_size=2,)
                 # use_layer_scale=use_layer_scale, layer_scale_init_value=layer_scale_init_value, channel_layer_scale=channel_layer_scale,
                 # )
-            for i in range(st_idx[2],st_idx[3])])
+            for i in range(st2_idx,st3_idx)])
         
-        self.patch_embed3 = embed_layer(in_chans=embed_dims[1], embed_dim=embed_dims[2])
-        self.num_patches3 = num_patches = (num_patches[0] // 2, num_patches[1] // 2)
-        self.pos_embed3 = nn.Parameter(torch.zeros(1, num_patches[0], num_patches[1], embed_dims[2]))
+        self.patch_embed3 = embed_layer(kernel_size=3, stride=2, padding=1, in_chans=embed_dims[1], embed_dim=embed_dims[2])
+        self.num_patches3 = num_patches = num_patches // 2
+        self.pos_embed3 = nn.Parameter(torch.zeros(1, num_patches, num_patches, embed_dims[2]))
         self.blocks3= nn.Sequential(*[
             Block(
                 dim=embed_dims[2], num_heads=num_heads[2], mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, drop=drop_rate,
                 attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer, act_layer=act_layer, attention_head=attention_heads[i], pool_size=1,
                 use_layer_scale=use_layer_scale, layer_scale_init_value=layer_scale_init_value, 
                 )
-            for i in range(st_idx[3], st_idx[4])])
+            for i in range(st3_idx, st4_idx)])
         
-        self.patch_embed4 = embed_layer(in_chans=embed_dims[2], embed_dim=embed_dims[3])
-        self.num_patches4 = num_patches = (num_patches[0] // 2, num_patches[1] // 2)
-        self.pos_embed4 = nn.Parameter(torch.zeros(1, num_patches[0], num_patches[1], embed_dims[3]))
+        self.patch_embed4 = embed_layer(kernel_size=3, stride=2, padding=1, in_chans=embed_dims[2], embed_dim=embed_dims[3])
+        self.num_patches4 = num_patches = num_patches // 2
+        self.pos_embed4 = nn.Parameter(torch.zeros(1, num_patches, num_patches, embed_dims[3]))
         self.blocks4 = nn.Sequential(*[
             Block(
                 dim=embed_dims[3], num_heads=num_heads[3], mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, drop=drop_rate,
                 attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer, act_layer=act_layer, attention_head=attention_heads[i], pool_size=1,
                 use_layer_scale=use_layer_scale, layer_scale_init_value=layer_scale_init_value, 
                 )
-            for i in range(st_idx[4],st_idx[5])])
-        
-        self.concat_back_dim = nn.ModuleList()
-        self.concat_back_dim.append(nn.Linear(2*embed_dims[0], embed_dims[0]))
-        self.concat_back_dim.append(nn.Linear(2*embed_dims[1], embed_dims[1]))
-        self.concat_back_dim.append(nn.Linear(2*embed_dims[2], embed_dims[2]))
-        
-        self.patch_embed5 = de_embed_layer(in_chans=embed_dims[3], embed_dim=embed_dims[2])
-        self.num_patches5 = num_patches = (num_patches[0] * 2, num_patches[1] * 2)
-        self.pos_embed5 = nn.Parameter(torch.zeros(1, num_patches[0], num_patches[1], embed_dims[2]))
-        self.blocks5= nn.Sequential(*[
-            Block(
-                dim=embed_dims[2], num_heads=num_heads[2], mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, drop=drop_rate,
-                attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer, act_layer=act_layer, attention_head=attention_heads[i], pool_size=1,
-                use_layer_scale=use_layer_scale, layer_scale_init_value=layer_scale_init_value, 
-                )
-            for i in range(st_idx[5], st_idx[6])])
-        
-        self.patch_embed6 = de_embed_layer(in_chans=embed_dims[2], embed_dim=embed_dims[1])
-        self.num_patches6 = num_patches = (num_patches[0] * 2, num_patches[1] * 2)
-        self.pos_embed6 = nn.Parameter(torch.zeros(1, num_patches[0], num_patches[1], embed_dims[1]))
-        self.blocks6 = nn.Sequential(*[
-            Block(
-                dim=embed_dims[1], num_heads=num_heads[1], mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, drop=drop_rate,
-                attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer, act_layer=act_layer, attention_head=attention_heads[i], pool_size=2,)
-                # use_layer_scale=use_layer_scale, layer_scale_init_value=layer_scale_init_value, channel_layer_scale=channel_layer_scale,
-                # )
-            for i in range(st_idx[6],st_idx[7])])
-        
-        self.patch_embed7 = de_embed_layer(in_chans=embed_dims[1], embed_dim=embed_dims[0])
-        self.num_patches7 = num_patches = (num_patches[0] * 2, num_patches[1] * 2)
-        self.pos_embed7 = nn.Parameter(torch.zeros(1, num_patches[0], num_patches[1], embed_dims[0]))
-        self.blocks7 = nn.Sequential(*[
-            Block(
-                dim=embed_dims[0], num_heads=num_heads[0], mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, drop=drop_rate,
-                attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer, act_layer=act_layer, attention_head=attention_heads[i], pool_size=2,)
-                # use_layer_scale=use_layer_scale, layer_scale_init_value=layer_scale_init_value, 
-                # )
-            for i in range(st_idx[7], st_idx[8])])
-        
-        self.patch_embed8 = FinalPatchDeEmbed(in_chans=embed_dims[0], embed_dim=embed_dims[0])
-        self.output = nn.Conv2d(in_channels=embed_dims[0], out_channels=out_chans, kernel_size=3, stride=1,
-                                padding=1, bias=False)  # kernel = 1
+            for i in range(st4_idx,depth)])
         
         self.norm = norm_layer(embed_dims[-1])
-        self.norm_up = norm_layer(embed_dims[0])
         # Classifier head(s)
-        # self.head = nn.Linear(embed_dims[-1], num_classes) if num_classes > 0 else nn.Identity()
+        self.head = nn.Linear(embed_dims[-1], num_classes) if num_classes > 0 else nn.Identity()
         # set post block, for example, class attention layers
 
         self.init_weights(weight_init)
@@ -513,9 +411,6 @@ class InceptionTransformer(nn.Module):
         trunc_normal_(self.pos_embed2, std=.02)
         trunc_normal_(self.pos_embed3, std=.02)
         trunc_normal_(self.pos_embed4, std=.02)
-        trunc_normal_(self.pos_embed5, std=.02)
-        trunc_normal_(self.pos_embed6, std=.02)
-        trunc_normal_(self.pos_embed7, std=.02)
         
         self.apply(_init_vit_weights)
 
@@ -524,55 +419,49 @@ class InceptionTransformer(nn.Module):
         _init_vit_weights(m)
 
 
-    # @torch.jit.ignore
-    # def no_weight_decay(self):
-    #     return {'pos_embed', 'cls_token', 'dist_token'}
+    @torch.jit.ignore
+    def no_weight_decay(self):
+        return {'pos_embed', 'cls_token', 'dist_token'}
 
-    # def get_classifier(self):
-    #     if self.dist_token is None:
-    #         return self.head
-    #     else:
-    #         return self.head, self.head_dist
+    def get_classifier(self):
+        if self.dist_token is None:
+            return self.head
+        else:
+            return self.head, self.head_dist
 
-    # def reset_classifier(self, num_classes, global_pool=''):
-    #     self.num_classes = num_classes
-    #     self.head = nn.Linear(self.embed_dim, num_classes) if num_classes > 0 else nn.Identity()
-    #     if self.num_tokens == 2:
-    #         self.head_dist = nn.Linear(self.embed_dim, self.num_classes) if num_classes > 0 else nn.Identity()
+    def reset_classifier(self, num_classes, global_pool=''):
+        self.num_classes = num_classes
+        self.head = nn.Linear(self.embed_dim, num_classes) if num_classes > 0 else nn.Identity()
+        if self.num_tokens == 2:
+            self.head_dist = nn.Linear(self.embed_dim, self.num_classes) if num_classes > 0 else nn.Identity()
     
     def _get_pos_embed(self, pos_embed, num_patches_def, H, W):
-        if H * W == num_patches_def[0] * num_patches_def[1]:
+        if H * W == num_patches_def * num_patches_def:
             return pos_embed
         else:
             return F.interpolate(
                 pos_embed.permute(0, 3, 1, 2),
                 size=(H, W), mode="bilinear").permute(0, 2, 3, 1)
 
-    def forward_features(self, x): # B C H W
-        
-        skip_point = []
-        
+    def forward_features(self, x):
         x = self.patch_embed(x)
         B, H, W, C = x.shape
-        x = x + self._get_pos_embed(self.pos_embed1, self.num_patches1, H, W)
-        skip_point.append(x) # skip-0
+        x = x + self._get_pos_embed(self.pos_embed1, self.num_patches1, H, W) 
         x = self.blocks1(x)
-        x = x.permute(0, 3, 1, 2)
-             
+        
+        x = x.permute(0, 3, 1, 2)       
         x = self.patch_embed2(x)
         B, H, W, C = x.shape
         x = x + self._get_pos_embed(self.pos_embed2, self.num_patches2, H, W) 
-        skip_point.append(x) # skip-1
         x = self.blocks2(x)
-        x = x.permute(0, 3, 1, 2)
         
+        x = x.permute(0, 3, 1, 2)
         x = self.patch_embed3(x)
         B, H, W, C = x.shape
         x = x + self._get_pos_embed(self.pos_embed3, self.num_patches3, H, W) 
-        skip_point.append(x) # skip-2
         x = self.blocks3(x)
-        x = x.permute(0, 3, 1, 2)  
         
+        x = x.permute(0, 3, 1, 2)  
         x = self.patch_embed4(x)
         B, H, W, C = x.shape
         x = x + self._get_pos_embed(self.pos_embed4, self.num_patches4, H, W) 
@@ -580,54 +469,12 @@ class InceptionTransformer(nn.Module):
         x = x.flatten(1, 2)
 
         x = self.norm(x)
-        
-        x = x.view(B, H, W, C)
-        x = x.permute(0, 3, 1, 2)  
-             
-        x = self.patch_embed5(x)
-        B, H, W, C = x.shape
-        x = x + self._get_pos_embed(self.pos_embed5, self.num_patches5, H, W) 
-        # x = torch.cat([x, skip_point[2]], -1)
-        # x = self.concat_back_dim[2](x) # skip-2
-        x = self.blocks5(x)
-        x = x.permute(0, 3, 1, 2)   
-            
-        x = self.patch_embed6(x)
-        B, H, W, C = x.shape
-        x = x + self._get_pos_embed(self.pos_embed6, self.num_patches6, H, W) 
-        # x = torch.cat([x, skip_point[1]], -1)
-        # x = self.concat_back_dim[1](x) # skip-1
-        x = self.blocks6(x)
-        x = x.permute(0, 3, 1, 2)
-               
-        x = self.patch_embed7(x)
-        B, H, W, C = x.shape
-        x = x + self._get_pos_embed(self.pos_embed7, self.num_patches7, H, W) 
-        # x = torch.cat([x, skip_point[0]], -1)
-        # x = self.concat_back_dim[0](x) # skip-0
-        x = self.blocks7(x)
-        x = x.flatten(1, 2)
-        
-        x = self.norm_up(x)
-        
-        x = x.view(B, H, W, C)
-        x = x.permute(0, 3, 1, 2)
-        
-        x = self.patch_embed8(x)
-        x = x.permute(0, 3, 1, 2)
-        
-        
-        return x # B C H W
+        return x.mean(1)
     
     def forward(self, x):
-        
-        x = self.conv_first(x) # 3*3 conv2d kernel
-        
         x = self.forward_features(x)
-        
-        out = self.output(x)
-        
-        return out
+        x = self.head(x)
+        return x
 
 def _init_vit_weights(module: nn.Module, name: str = '', head_bias: float = 0.):
     """ ViT weight initialization
@@ -656,7 +503,7 @@ def _init_vit_weights(module: nn.Module, name: str = '', head_bias: float = 0.):
 
     
 @register_model
-def iformer_small(pretrained=False, img_size=224, **kwargs):
+def iformer_small(pretrained=False, **kwargs):
     """
     19.866M  4.849G 83.382
     """
@@ -665,7 +512,7 @@ def iformer_small(pretrained=False, img_size=224, **kwargs):
     num_heads = [3, 6, 10, 12]
     attention_heads = [1]*3 + [3]*3 + [7] * 4 + [9] * 5 + [11] * 3
     
-    model = InceptionTransformer(img_size=img_size,
+    model = InceptionTransformer(img_size=224,
         depths=depths,
         embed_dims=embed_dims,
         num_heads=num_heads,
@@ -673,12 +520,14 @@ def iformer_small(pretrained=False, img_size=224, **kwargs):
         use_layer_scale=True, layer_scale_init_value=1e-6,
         **kwargs)
     model.default_cfg = default_cfgs['iformer_small']
+    if pretrained:
+        url = model.default_cfg['url']
+        checkpoint = torch.hub.load_state_dict_from_url(url=url, map_location="cpu", check_hash=True)
+        model.load_state_dict(checkpoint)
     return model
 
-
-
 @register_model
-def iformer_base(pretrained=False, img_size=224, **kwargs):
+def iformer_base(pretrained=False, **kwargs):
     """ 
     47.866M  9.379G  84.598
     """
@@ -687,7 +536,7 @@ def iformer_base(pretrained=False, img_size=224, **kwargs):
     num_heads = [3, 6, 12, 16]
     attention_heads = [1]*4 + [3]*6 + [8] * 7 + [10] * 7 + [15] * 6
     
-    model = InceptionTransformer(img_size=img_size,
+    model = InceptionTransformer(img_size=224,
         depths=depths, 
         embed_dims=embed_dims,
         num_heads=num_heads,
@@ -695,12 +544,14 @@ def iformer_base(pretrained=False, img_size=224, **kwargs):
         use_layer_scale=True, layer_scale_init_value=1e-6, 
         **kwargs)
     model.default_cfg = default_cfgs['iformer_base']
+    if pretrained:
+        url = model.default_cfg['url']
+        checkpoint = torch.hub.load_state_dict_from_url(url=url, map_location="cpu", check_hash=True)
+        model.load_state_dict(checkpoint)
     return model
 
-
-
 @register_model
-def iformer_large(pretrained=False, img_size=224, **kwargs):
+def iformer_large(pretrained=False, **kwargs):
     """ 
     86.637M  14.048G 84.752
     """   
@@ -709,7 +560,7 @@ def iformer_large(pretrained=False, img_size=224, **kwargs):
     num_heads = [3, 6, 14, 20]
     attention_heads = [1]*4 + [3]*6 + [10] * 9 + [12] * 9 + [19] * 8
     
-    model = InceptionTransformer(img_size=img_size,
+    model = InceptionTransformer(img_size=224,
         depths=depths, 
         embed_dims=embed_dims,
         num_heads=num_heads,
@@ -717,4 +568,8 @@ def iformer_large(pretrained=False, img_size=224, **kwargs):
         use_layer_scale=True, layer_scale_init_value=1e-6, 
         **kwargs)
     model.default_cfg = default_cfgs['iformer_large']
+    if pretrained:
+        url = model.default_cfg['url']
+        checkpoint = torch.hub.load_state_dict_from_url(url=url, map_location="cpu", check_hash=True)
+        model.load_state_dict(checkpoint)
     return model

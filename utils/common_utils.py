@@ -278,17 +278,18 @@ def optimize(optimizer_type, parameters, closure, LR, num_iter, LR_min=1e-6):
         optimizer = torch.optim.Adam(parameters, lr=LR)
         
         ## Scheduler (Strategy)
-        warmup_epochs = 300
+        warmup_epochs = 1
         scheduler_cosine = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, num_iter-warmup_epochs, eta_min=LR_min)
         scheduler = GradualWarmupScheduler(optimizer, multiplier=1, total_epoch=warmup_epochs, after_scheduler=scheduler_cosine)
-        # scheduler.step()
         
         for j in range(num_iter):
             optimizer.zero_grad()
             closure()
             optimizer.step()
             scheduler.step()
-        
+    
+    # elif optimizer_type ==
+    
     else:
         assert False
 

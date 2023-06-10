@@ -345,7 +345,7 @@ class UpSample(nn.Module):
 
 
         if self.factor == 2:
-            self.conv = nn.Conv2d(in_channels, in_channels//2, 1, 1, 0, bias=False)
+            # self.conv = nn.Conv2d(in_channels, in_channels//2, 1, 1, 0, bias=False)
             # self.up_p = nn.Sequential(nn.Conv2d(in_channels, 2*in_channels, 1, 1, 0, bias=False),
             #                           nn.PReLU(),
             #                           nn.PixelShuffle(scale_factor),
@@ -356,7 +356,7 @@ class UpSample(nn.Module):
                                       nn.Upsample(scale_factor=scale_factor, mode='bilinear', align_corners=False),
                                       nn.Conv2d(in_channels, in_channels // 2, 1, stride=1, padding=0, bias=False))
         elif self.factor == 4:
-            self.conv = nn.Conv2d(2*in_channels, in_channels, 1, 1, 0, bias=False)
+            # self.conv = nn.Conv2d(2*in_channels, in_channels, 1, 1, 0, bias=False)
             # self.up_p = nn.Sequential(nn.Conv2d(in_channels, 16 * in_channels, 1, 1, 0, bias=False),
             #                           nn.PReLU(),
             #                           nn.PixelShuffle(scale_factor),
@@ -734,8 +734,8 @@ class SUNet(nn.Module):
             if inx == 0:
                 x = layer_up(x)
             else:
-                # x = torch.cat([x, x_downsample[3-inx]], -1)
-                # x = self.concat_back_dim[inx](x)
+                x = torch.cat([x, x_downsample[3-inx]], -1)
+                x = self.concat_back_dim[inx](x)
                 x = layer_up(x)
 
         x = self.norm_up(x)  # B L C
@@ -789,8 +789,8 @@ class SwinUnet2(nn.Module):
                                out_chans=out_chans,
                                window_size=window_size,
                                depths=[2, 2, 2, 2],
-                               num_heads=[8, 8, 8, 8],
-                               qk_scale=8,
+                               num_heads=[4, 4, 4, 4],
+                            #    qk_scale=8,
                                )
 
     def forward(self, x):

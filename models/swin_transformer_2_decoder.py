@@ -383,7 +383,6 @@ class UpSample(nn.Module):
         x = x.permute(0, 3, 1, 2)  # B, C, H, W
         x_p = self.up_p(x)  # pixel shuffle
         x_b = self.up_b(x)  # bilinear
-        out = x_b
         out = self.conv(torch.cat([x_p, x_b], dim=1))
         out = out.permute(0, 2, 3, 1)  # B, H, W, C
         if self.factor == 2:
@@ -553,8 +552,8 @@ class PatchEmbed(nn.Module):
     def forward(self, x):
         B, C, H, W = x.shape
         # FIXME look at relaxing size constraints
-        assert H == self.img_size[0] and W == self.img_size[1], \
-           f"Input image size ({H}*{W}) doesn't match model ({self.img_size[0]}*{self.img_size[1]})."
+        # assert H == self.img_size[0] and W == self.img_size[1], \
+        #    f"Input image size ({H}*{W}) doesn't match model ({self.img_size[0]}*{self.img_size[1]})."
         x = self.proj(x).flatten(2).transpose(1, 2)  # B Ph*Pw C
         if self.norm is not None:
             x = self.norm(x)
@@ -594,7 +593,7 @@ class SUNet(nn.Module):
         use_checkpoint (bool): Whether to use checkpointing to save memory. Default: False
     """
 
-    def __init__(self, img_size=224, patch_size=4, in_chans=3, out_chans=3,
+    def __init__(self, img_size=512, patch_size=4, in_chans=3, out_chans=3,
                  embed_dim=96, depths=[2, 2, 2, 2], num_heads=[3, 6, 12, 24],
                  window_size=7, mlp_ratio=4., qkv_bias=True, qk_scale=None,
                  drop_rate=0.0, attn_drop_rate=0.0, drop_path_rate=0.1,
@@ -612,14 +611,20 @@ class SUNet(nn.Module):
         self.mlp_ratio = mlp_ratio
         self.final_upsample = final_upsample
         self.prelu = nn.PReLU()
-        self.norm_layer = norm_layer
-        self.img_size = img_size
-        self.patch_size = patch_size
-        self.drop_rate = drop_rate
-
+        
+        self.patch_embed = PatchEmbed(
+            img_size=img_size, patch_size=patch_size, in_chans=768, embed_dim=768,
+            norm_layer=norm_layer if self.patch_norm else None)
+        num_patches = self.patch_embed.num_patches
         patches_resolution = self.patch_embed.patches_resolution
         self.patches_resolution = patches_resolution
 
+        # absolute position embedding
+        if self.ape:
+            self.absolute_pos_embed = nn.Parameter(torch.zeros(1, num_patches, 768))
+            trunc_normal_(self.absolute_pos_embed, std=.02)
+
+        self.pos_drop = nn.Dropout(p=drop_rate)
         # stochastic depth
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, sum(depths))]  # stochastic depth decay rule
 
@@ -704,18 +709,13 @@ class SUNet(nn.Module):
     # 前向传播 *** point 11111
     def forward(self, x):
         
-        self.patch_embed = PatchEmbed(
-            img_size=self.img_size, patch_size=self.patch_size, in_chans=768, embed_dim=768,
-            norm_layer=self.norm_layer if self.patch_norm else None)
-        self.absolute_pos_embed = nn.Parameter(torch.zeros(1, self.patch_embed.num_patches, 768))
-        trunc_normal_(self.absolute_pos_embed, std=.02)
-
-        self.pos_drop = nn.Dropout(p=self.drop_rate)
-        
-        x = self.patch_embed(x)
+        # x = self.patch_embed(x)
+        x = rearrange(x, 'b c h w-> b (h w) c')
         if self.ape:
             x = x + self.absolute_pos_embed
         x = self.pos_drop(x)
+        
+        # x = self.norm(x)  # B L C
         
         x = self.forward_up_features(x)
 
@@ -723,7 +723,6 @@ class SUNet(nn.Module):
         
         out = self.output(x)
 
-        # x = x + residual
         return out
 
     def flops(self):
