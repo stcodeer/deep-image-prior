@@ -40,7 +40,7 @@ fname = 'data/denoising/%s.png'%img_name
 NET_TYPE = 'SwinUnet2' # one of skip|ViT|SwinUnet2|Swin2Decoder|iformer_small|iformer_base|iformer_large
 
 # exp_name = '_skip_nopixel_halfprenoise'
-exp_name = '_skip_nopixel_noprenoise_heads4444_depths2222_noqkscale'
+exp_name = '_skip_nopixel_noprenoise_noqkscale_embedpadding'
 
 num_iter = 20000
 
@@ -48,7 +48,8 @@ INPUT = 'noise' # 'noise', meshgrid', 'fourier'
 pad = 'reflection'
 OPT_OVER = 'net' # 'net,input'
 
-imsize =-1
+wavelet_method = 'None' # 'None', 'haar' (only enable when SwinUnet2)
+imsize = -1
 PLOT = False
 sigma = 25 # 25, 50
 sigma_ = sigma/255.
@@ -147,7 +148,7 @@ if fname == 'data/denoising/F16_GT.png':
         LR = 1e-3
     
     elif NET_TYPE[0:4] == 'Swin':
-        if NET_TYPE == 'Swin2Decoder':
+        if 'Decoder' in NET_TYPE:
             input_depth = 768
         else:
             input_depth = 32
@@ -156,13 +157,12 @@ if fname == 'data/denoising/F16_GT.png':
                         in_chans=input_depth,
                         out_chans=3,
                         window_size=16,
+                        wavelet_method=wavelet_method,
                         ).type(dtype)
         
         if OPTIMIZER == 'adam_gradual_warmup':
             LR = 5e-5
             LR_min = 1e-6
-        elif NET_TYPE == 'Swin2Decoder':
-            LR = 5e-5
         else:
             LR = 5e-5
         
@@ -179,7 +179,7 @@ if fname == 'data/denoising/F16_GT.png':
 else:
     assert False
     
-if NET_TYPE == 'Swin2Decoder':
+if 'Decoder' in NET_TYPE:
     net_input = get_noise(input_depth, INPUT, (img_pil.size[1]//32, img_pil.size[0]//32)).type(dtype).detach()
 else:
     net_input = get_noise(input_depth, INPUT, (img_pil.size[1], img_pil.size[0])).type(dtype).detach()

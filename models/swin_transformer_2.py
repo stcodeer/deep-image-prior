@@ -9,6 +9,7 @@ from utils.denoising_utils import *
 from utils.measure_utils import *
 from utils.common_utils import *
 import numpy as np
+from models.common_wavelet import *
 
 class Mlp(nn.Module):
     def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, drop=0.):
@@ -338,10 +339,11 @@ class PatchMerging(nn.Module):
 
 # Dual up-sample
 class UpSample(nn.Module):
-    def __init__(self, input_resolution, in_channels, scale_factor):
+    def __init__(self, input_resolution, in_channels, scale_factor, end=False):
         super(UpSample, self).__init__()
         self.input_resolution = input_resolution
         self.factor = scale_factor
+        self.end = end
 
 
         if self.factor == 2:
@@ -386,7 +388,7 @@ class UpSample(nn.Module):
         # out = self.conv(torch.cat([x_p, x_b], dim=1))
         out = x_b
         out = out.permute(0, 2, 3, 1)  # B, H, W, C
-        if self.factor == 2:
+        if not self.end:
             out = out.view(B, -1, C // 2)
 
         return out
@@ -531,7 +533,7 @@ class PatchEmbed(nn.Module):
         norm_layer (nn.Module, optional): Normalization layer. Default: None
     """
 
-    def __init__(self, img_size=224, patch_size=4, in_chans=3, embed_dim=96, norm_layer=None):
+    def __init__(self, img_size=224, patch_size=4, in_chans=3, embed_dim=96, stride=4, norm_layer=None):
         super().__init__()
         img_size = to_2tuple(img_size)
         patch_size = to_2tuple(patch_size)
@@ -544,7 +546,7 @@ class PatchEmbed(nn.Module):
         self.in_chans = in_chans
         self.embed_dim = embed_dim
 
-        self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=patch_size, stride=patch_size)
+        self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=patch_size, stride=stride, padding=1)
         if norm_layer is not None:
             self.norm = norm_layer(embed_dim)
         else:
@@ -553,8 +555,8 @@ class PatchEmbed(nn.Module):
     def forward(self, x):
         B, C, H, W = x.shape
         # FIXME look at relaxing size constraints
-        assert H == self.img_size[0] and W == self.img_size[1], \
-           f"Input image size ({H}*{W}) doesn't match model ({self.img_size[0]}*{self.img_size[1]})."
+        # assert H == self.img_size[0] and W == self.img_size[1], \
+        #    f"Input image size ({H}*{W}) doesn't match model ({self.img_size[0]}*{self.img_size[1]})."
         x = self.proj(x).flatten(2).transpose(1, 2)  # B Ph*Pw C
         if self.norm is not None:
             x = self.norm(x)
@@ -599,7 +601,9 @@ class SUNet(nn.Module):
                  window_size=7, mlp_ratio=4., qkv_bias=True, qk_scale=None,
                  drop_rate=0.0, attn_drop_rate=0.0, drop_path_rate=0.1,
                  norm_layer=nn.LayerNorm, ape=False, patch_norm=True,
-                 use_checkpoint=False, final_upsample="Dual up-sample", **kwargs):
+                 use_checkpoint=False, 
+                 wavelet_method='None',
+                 **kwargs):
         super(SUNet, self).__init__()
 
         self.out_chans = out_chans
@@ -610,17 +614,32 @@ class SUNet(nn.Module):
         self.num_features = int(embed_dim * 2 ** (self.num_layers - 1))
         self.num_features_up = int(embed_dim * 2)
         self.mlp_ratio = mlp_ratio
-        self.final_upsample = final_upsample
-        self.prelu = nn.PReLU()
+        self.wavelet_method = wavelet_method
         # self.conv_first = nn.Conv2d(in_chans, embed_dim, 3, 1, 1) # 3*3 conv2d kernel
 
         # split image into non-overlapping patches
         # self.patch_embed = PatchEmbed( # 3*3 conv2d kernel
         #     img_size=img_size, patch_size=patch_size, in_chans=embed_dim, embed_dim=embed_dim,
         #     norm_layer=norm_layer if self.patch_norm else None)
-        self.patch_embed = PatchEmbed(
-            img_size=img_size, patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim,
-            norm_layer=norm_layer if self.patch_norm else None)
+        if self.wavelet_method == 'None':
+            self.patch_embed = PatchEmbed(
+                img_size=img_size, patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim, stride=patch_size,
+                norm_layer=norm_layer if self.patch_norm else None)
+            self.up = UpSample(input_resolution=(img_size // patch_size, img_size // patch_size),
+                               in_channels=embed_dim, scale_factor=4, end=True)
+            self.output = nn.Conv2d(in_channels=embed_dim, out_channels=self.out_chans, kernel_size=3, stride=1,
+                                    padding=1, bias=False)  # kernel = 1
+        else:
+            self.dwt = dwt
+            self.patch_embed = PatchEmbed(
+                img_size=img_size, patch_size=patch_size, in_chans=in_chans*4, embed_dim=embed_dim, stride=patch_size//2,
+                norm_layer=nn.LeakyReLU)
+            self.up = UpSample(input_resolution=(img_size // patch_size, img_size // patch_size),
+                               in_channels=embed_dim, scale_factor=2, end=True)
+            self.idwt = idwt
+            self.output = nn.Conv2d(in_channels=embed_dim//8, out_channels=self.out_chans, kernel_size=3, stride=1,
+                                    padding=1, bias=False)  # kernel = 1
+            
         num_patches = self.patch_embed.num_patches
         patches_resolution = self.patch_embed.patches_resolution
         self.patches_resolution = patches_resolution
@@ -685,12 +704,6 @@ class SUNet(nn.Module):
         self.norm = norm_layer(self.num_features)
         self.norm_up = norm_layer(self.embed_dim)
 
-        if self.final_upsample == "Dual up-sample":
-            self.up = UpSample(input_resolution=(img_size // patch_size, img_size // patch_size),
-                               in_channels=embed_dim, scale_factor=4)
-            self.output = nn.Conv2d(in_channels=embed_dim, out_channels=self.out_chans, kernel_size=3, stride=1,
-                                    padding=1, bias=False)  # kernel = 1
-
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
@@ -747,15 +760,17 @@ class SUNet(nn.Module):
         B, L, C = x.shape
         assert L == H * W, "input features has wrong size"
 
-        if self.final_upsample == "Dual up-sample":
-            x = self.up(x)
-            # x = x.view(B, 4 * H, 4 * W, -1)
-            x = x.permute(0, 3, 1, 2)  # B,C,H,W
+        x = self.up(x)
+        # x = x.view(B, 4 * H, 4 * W, -1)
+        x = x.permute(0, 3, 1, 2)  # B,C,H,W
 
         return x
 
     # 前向传播 *** point 11111
     def forward(self, x):
+        # x: B C H W
+        if not self.wavelet_method == 'None':
+            x = self.dwt(x, self.wavelet_method)
         
         # x = self.conv_first(x) # 3*3 conv2d kernel
         
@@ -765,6 +780,9 @@ class SUNet(nn.Module):
         # x = self.forward_up_features(x)
 
         x = self.up_x4(x)
+        
+        if not self.wavelet_method == 'None':
+            x = self.idwt(x, self.wavelet_method)
         
         out = self.output(x)
 
@@ -781,16 +799,19 @@ class SUNet(nn.Module):
         return flops
 
 class SwinUnet2(nn.Module):
-    def __init__(self, img_size=512, in_chans=3, out_chans=3, window_size=16):
+    def __init__(self, img_size=512, in_chans=3, out_chans=3, window_size=16, wavelet_method='None'):
         super(SwinUnet2, self).__init__()
+        
+        # if enable_wavelet == True:
+        #     windows_size = windows_size // 2
         
         self.swin_unet = SUNet(img_size=img_size,
                                in_chans=in_chans,
                                out_chans=out_chans,
                                window_size=window_size,
                                depths=[2, 2, 2, 2],
-                               num_heads=[4, 4, 4, 4],
-                            #    qk_scale=8,
+                               num_heads=[8, 8, 8, 8],
+                               wavelet_method=wavelet_method,
                                )
 
     def forward(self, x):
