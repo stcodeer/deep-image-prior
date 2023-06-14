@@ -257,7 +257,7 @@ def optimize(optimizer_type, parameters, closure, LR, num_iter, LR_min=1e-6):
             closure()
             optimizer.step()
 
-        print('Starting optimization with LBFGS')        
+        # print('Starting optimization with LBFGS')        
         def closure2():
             optimizer.zero_grad()
             return closure()
@@ -265,7 +265,7 @@ def optimize(optimizer_type, parameters, closure, LR, num_iter, LR_min=1e-6):
         optimizer.step(closure2)
 
     elif optimizer_type == 'adam':
-        print('Starting optimization with ADAM')
+        # print('Starting optimization with ADAM')
         optimizer = torch.optim.Adam(parameters, lr=LR)
         
         for j in range(num_iter):
@@ -274,7 +274,7 @@ def optimize(optimizer_type, parameters, closure, LR, num_iter, LR_min=1e-6):
             optimizer.step()
     
     elif optimizer_type == 'adam_gradual_warmup':
-        print('Starting optimization with ADAM Gradual Warmup')
+        # print('Starting optimization with ADAM Gradual Warmup')
         optimizer = torch.optim.Adam(parameters, lr=LR)
         
         ## Scheduler (Strategy)

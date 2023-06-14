@@ -10,7 +10,7 @@ def dwt_np(x, wavelet='haar'):
     input: B C H W
     output: B C*4 H//2 W//2
     """
-    cA, (cH, cV, cD) = pywt.dwt2(x, wavelet)
+    cA, (cH, cV, cD) = pywt.dwt2(x, wavelet, mode='periodization')
     
     # # x_before
     # plot_image_grid([x], factor=13, save_path='x_before.png')
@@ -37,7 +37,7 @@ def idwt_np(x, wavelet='haar'):
     
     cA, cH, cV, cD = torch.chunk(x, 4, 1)
         
-    x = pywt.idwt2((cA, (cH, cV, cD)), wavelet)
+    x = pywt.idwt2((cA, (cH, cV, cD)), wavelet, mode='periodization')
     
     # # x_after
     # plot_image_grid([x], factor=13, save_path='x_after.png')
@@ -50,7 +50,7 @@ def dwt(x, wavelet='haar'):
     input: B C H W
     output: B C*4 H//2 W//2
     """
-    xfm = DWTForward(J=1, wave=wavelet, mode='zero').cuda()
+    xfm = DWTForward(J=1, wave=wavelet, mode='periodization').cuda()
     cA, cD = xfm(x)
 
     cH, cV, cD = torch.chunk(cD[0], 3, 2)
@@ -77,7 +77,7 @@ def idwt(x, wavelet='haar'):
     cD = torch.unsqueeze(cD, 2)
     cD = torch.cat((cH, cV, cD), 2)
 
-    ifm = DWTInverse(wave=wavelet, mode='zero').cuda()
+    ifm = DWTInverse(wave=wavelet, mode='periodization').cuda()
     x = ifm((cA, [cD]))
     
     return x

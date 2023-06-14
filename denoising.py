@@ -10,8 +10,6 @@ import matplotlib.pyplot as plt
 # %matplotlib inline
 
 import os
-# os.environ['CUDA_VISIBLE_DEVICES'] = '-1'  # run on CPU
-os.environ['CUDA_VISIBLE_DEVICES'] = '0' # run on GPU
 import numpy as np
 from models import *
 from models.ViT import ViT
@@ -27,36 +25,38 @@ from utils.denoising_utils import *
 from utils.measure_utils import *
 from utils.common_utils import *
 from utils.visualize_utils import *
+from distutils.util import strtobool
 
 torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark =True
+
+# os.environ['CUDA_VISIBLE_DEVICES'] = '-1'  # run on CPU
 # dtype = torch.FloatTensor # run on CPU
+os.environ['CUDA_VISIBLE_DEVICES'] = '0' # run on GPU
 dtype = torch.cuda.FloatTensor # run on GPU
 
 # hyperparameter
-img_name = 'F16_GT'
-fname = 'data/denoising/%s.png'%img_name
 
-NET_TYPE = 'SwinUnet2' # one of skip|ViT|SwinUnet2|Swin2Decoder|iformer_small|iformer_base|iformer_large
+img_name = sys.argv[1]
+num_iter = int(sys.argv[2])
+sigma = int(sys.argv[3])
+reg_noise_std = float(sys.argv[4])
+show_every = int(sys.argv[5])
+PLOT = bool(strtobool(sys.argv[6]))
+NET_TYPE = sys.argv[7]
+exp_name = sys.argv[8]
+wavelet_method = sys.argv[9]
+INPUT = sys.argv[10]
+OPTIMIZER = sys.argv[11]
+exp_weight = float(sys.argv[12])
 
-# exp_name = '_skip_nopixel_halfprenoise'
-exp_name = '_skip_nopixel_noprenoise_noqkscale_embedpadding'
-
-num_iter = 20000
-
-INPUT = 'noise' # 'noise', meshgrid', 'fourier'
 pad = 'reflection'
 OPT_OVER = 'net' # 'net,input'
 
-wavelet_method = 'None' # 'None', 'haar' (only enable when SwinUnet2)
+fname = 'data/denoising/%s.png'%img_name
+
 imsize = -1
-PLOT = False
-sigma = 25 # 25, 50
 sigma_ = sigma/255.
-reg_noise_std = 0 # 1./30., 1./20.
-OPTIMIZER='adam' # 'adam', 'LBFGS', 'adam_gradual_warmup'
-show_every = 500
-exp_weight = 0.99
 
 # output path
 
@@ -65,7 +65,10 @@ if not os.path.exists('outputs'):
 
 file_name = 'outputs/' + img_name + '_' + NET_TYPE + '_' + str(num_iter) + '_' + INPUT + exp_name
 
-print(file_name)
+if not wavelet_method == 'None':
+    file_name = file_name + '_' + wavelet_method + 'wavelet'
+
+print('output file name: ', file_name)
 
 if not os.path.exists(file_name):
         os.mkdir(file_name)
@@ -102,7 +105,6 @@ elif fname == 'data/denoising/F16_GT.png':
     plot_image_grid([img_np, img_noisy_np], 4, 6, plot=PLOT)
 else:
     assert False
-print(img_np.shape)
 
 
 
@@ -147,7 +149,7 @@ if fname == 'data/denoising/F16_GT.png':
         
         LR = 1e-3
     
-    elif NET_TYPE[0:4] == 'Swin':
+    elif 'Swin' in NET_TYPE:
         if 'Decoder' in NET_TYPE:
             input_depth = 768
         else:
@@ -166,7 +168,7 @@ if fname == 'data/denoising/F16_GT.png':
         else:
             LR = 5e-5
         
-    elif NET_TYPE[0:7] == 'iformer':
+    elif 'iformer' in NET_TYPE:
         input_depth = 32
         
         net = locals()[NET_TYPE](in_chans=input_depth, img_size=(img_np.shape[1], img_np.shape[2])).type(dtype)
