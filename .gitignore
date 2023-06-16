@@ -1,4 +1,6 @@
 *.pyc
 *.yaml
 *.pth
+*.log
+*.json
 outputs

@@ -1,6 +1,8 @@
 from matplotlib import pyplot as plt
 import numpy as np
 import re
+from .common_utils import *
+from skimage.metrics import peak_signal_noise_ratio as compare_psnr
 
 plt.rcParams.update({'font.size': 18})
 
@@ -117,3 +119,84 @@ def get_loss_fig(all_datas,num_iter,ylim=0.05, ylabel='',save_path='',img_name='
     plt.savefig(save_path)
     # plt.show()
     plt.close()
+    
+def plot_frequency_figure(img, plot=False, save_path='default'):
+
+    if len(img.shape)==3:
+        img = rgb2gray(img)
+
+    ftimage = np.fft.fft2(img)
+    ftimage = abs(np.fft.fftshift(ftimage))
+
+    h,w = ftimage.shape
+
+    center = (int(w/2), int(h/2))
+    Y, X = np.ogrid[:h, :w]
+    dist_from_center = np.sqrt((X - center[0])**2 + (Y - center[1])**2)
+    distribution = {}
+    
+    for y in range(h):
+        for x in range(w):
+            if dist_from_center[y][x] not in distribution:
+                distribution[dist_from_center[y][x]] = ftimage[y][x]
+            else:
+                distribution[dist_from_center[y][x]] = distribution[dist_from_center[y][x]] + ftimage[y][x]
+    
+    distribution = sorted(distribution.items())
+    
+    index = [distribution[i][0] for i in range(len(distribution))]
+    value = [distribution[i][1] for i in range(len(distribution))]
+    
+    # plot frequency distribution
+    fig, ax = plt.subplots(figsize=(7,6))
+    ax.set_ylim(0, 1000)
+    
+    plt.plot(index, value, '.')
+    
+    if not save_path == 'default': 
+        plt.savefig(save_path+'_distribution.png')
+    if plot:
+        print("plotting...")
+        plt.show()
+    plt.close()
+    
+    # plot frequency brightness figure
+    limited_ftimage = np.clip(ftimage, 0, 100)
+    
+    limited_ftimage = np.expand_dims(limited_ftimage, 0)
+    
+    plot_image_grid([limited_ftimage], 7, 6, plot=plot, save_path=save_path+'_frequency.png' if not save_path=='default' else 'default')
+    
+def plot_filtered_figure(img, img_gt, size=0.2, plot=False, save_path='default'):
+    if len(img.shape)==3:
+        img = rgb2gray(img)
+        img_gt = rgb2gray(img_gt)
+    
+    img_gt=img_gt.astype(np.float64)
+
+    assert(size>0 and size<1)
+
+    ftimage = np.fft.fft2(img)
+    ftimage = np.fft.fftshift(ftimage) # no abs
+
+    h,w = ftimage.shape
+
+    center = (int(w/2), int(h/2))
+    Y, X = np.ogrid[:h, :w]
+    dist_from_center = np.sqrt((X - center[0])**2 + (Y - center[1])**2)
+    
+    for sz in np.linspace(size, 1, int(1/size)):
+        radius = center[0] * sz # pow(center[0]**2+center[1]**2,0.5)
+        mask = dist_from_center <= radius
+        mask = mask.astype(np.int32)
+        
+        filtered_ftimage = mask * ftimage
+        
+        filtered_img = abs(np.fft.ifft2(np.fft.ifftshift(filtered_ftimage)))
+        
+        psnr_gt = compare_psnr(img_gt, filtered_img)
+        
+        filtered_img = np.expand_dims(filtered_img, 0)
+        
+        plot_image_grid([filtered_img], 7, 6, plot=plot, title='PSNR_GT: '+str(psnr_gt), save_path=save_path+'_filtered_'+str(sz)[0:3]+'.png' if not save_path=='default' else 'default')
+        

@@ -2,6 +2,7 @@ import os
 from .common_utils import *
 from scipy.signal import convolve2d as conv2
 
+
 def get_circular_statastic(img_it, img_gt, size=0.2):
 
     if len(img_it.shape)==3:
@@ -25,13 +26,13 @@ def get_circular_statastic(img_it, img_gt, size=0.2):
 
     center = (int(w/2), int(h/2))
     Y, X = np.ogrid[:h, :w]
-    dist_from_center = np.sqrt((X - center[0])**2 + (Y-center[1])**2)
+    dist_from_center = np.sqrt((X - center[0])**2 + (Y - center[1])**2)
 
     avg_mask_list = []
-    pre_mask = np.zeros((h,w))
+    pre_mask = np.zeros((h, w))
     for sz in np.linspace(size, 1, int(1/size)):
 
-        radius = center[0]*sz#pow(center[0]**2+center[1]**2,0.5)
+        radius = center[0] * sz # pow(center[0]**2+center[1]**2,0.5)
         mask = dist_from_center <= radius
         mask = mask.astype(np.int32)
 
@@ -42,7 +43,7 @@ def get_circular_statastic(img_it, img_gt, size=0.2):
 
     return avg_mask_list
 
-def PerceptualBlurMetric (Image, FiltSize=9):
+def PerceptualBlurMetric(Image, FiltSize=9):
 
     if len(Image.shape)==3:
         Image = rgb2gray(Image)
