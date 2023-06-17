@@ -48,6 +48,9 @@ wavelet_method = sys.argv[9]
 INPUT = sys.argv[10]
 OPTIMIZER = sys.argv[11]
 exp_weight = float(sys.argv[12])
+depths = [int(sys.argv[13][i]) for i in range(4)]
+num_heads = [int(sys.argv[14][i]) for i in range(4)]
+core = sys.argv[15]
 
 pad = 'reflection'
 OPT_OVER = 'net' # 'net,input'
@@ -154,11 +157,15 @@ if fname == 'data/denoising/F16_GT.png':
         else:
             input_depth = 32
 
-        net = locals()[NET_TYPE](img_size=img_np.shape[1],
+        net = locals()[NET_TYPE](
+                        core=core,
+                        img_size=img_np.shape[1],
                         in_chans=input_depth,
                         out_chans=3,
                         window_size=16,
                         wavelet_method=wavelet_method,
+                        depths=depths,
+                        num_heads=num_heads,
                         ).type(dtype)
         
         if OPTIMIZER == 'adam_gradual_warmup':

@@ -29,41 +29,17 @@ img_noisy_pil, img_noisy_np = get_noisy_image(img_np, sigma_)
 cA, (cH, cV, cD) = dwt2(np.array([img_noisy_np[0]]), 'haar', mode='constant')
 
 # x_before
-plot_image_grid([img_noisy_np], factor=13, save_path='x_before.png')
+plot_image_grid([img_noisy_np], factor=13, save_path='outputs/F16_GT_before_cpu.png')
 
 # average
-plot_image_grid([(cA-np.min(cA))/(np.max(cA)-np.min(cA))], factor=13, save_path='A.png')
+plot_image_grid([(cA-np.min(cA))/(np.max(cA)-np.min(cA))], factor=13, save_path='outputs/F16_GT_average_cpu.png')
 # horizontal
-plot_image_grid([(cH-np.min(cH))/(np.max(cH)-np.min(cH))], factor=13, save_path='H.png')
+plot_image_grid([(cH-np.min(cH))/(np.max(cH)-np.min(cH))], factor=13, save_path='outputs/F16_GT_horizontal_cpu.png')
 # vertical
-plot_image_grid([(cV-np.min(cV))/(np.max(cV)-np.min(cV))], factor=13, save_path='V.png')
+plot_image_grid([(cV-np.min(cV))/(np.max(cV)-np.min(cV))], factor=13, save_path='outputs/F16_GT_vertical_cpu.png')
 # diagonal
-plot_image_grid([(cD-np.min(cD))/(np.max(cD)-np.min(cD))], factor=13, save_path='D.png')
+plot_image_grid([(cD-np.min(cD))/(np.max(cD)-np.min(cD))], factor=13, save_path='outputs/F16_GT_diagonal_cpu.png')
  
 # 2D harr inverse wavelet transform
 rimg_noisy_np = idwt2((cA,(cH,cV,cD)), 'haar')
-plot_image_grid([rimg_noisy_np], factor=13, save_path='x_after.png')
-
-
-
-        # # 2D harr wavelet transform
-        # cA, (cH, cV, cD) = pywt.dwt2(img_noisy_np, 'haar')
-        # # cA, (cH, cV, cD) = pywt.dwt2(np.array([img_noisy_np[0]]), 'haar')
-
-        # # x_before
-        # plot_image_grid([x], factor=13, save_path='x_before.png')
-        
-        # # average 
-        # plot_image_grid([(cA-np.min(cA))/(np.max(cA)-np.min(cA))], factor=13, save_path='A.png')
-        # # horizontal
-        # plot_image_grid([(cH-np.min(cH))/(np.max(cH)-np.min(cH))], factor=13, save_path='H.png')
-        # # vertical
-        # plot_image_grid([(cV-np.min(cV))/(np.max(cV)-np.min(cV))], factor=13, save_path='V.png')
-        # # diagonal
-        # plot_image_grid([(cD-np.min(cD))/(np.max(cD)-np.min(cD))], factor=13, save_path='D.png')
-        
-        # # 2D harr inverse wavelet transform
-        # rimg_noisy_np = pywt.idwt2((cA,(cH,cV,cD)), 'haar')
-        
-        # # x_after
-        # plot_image_grid([x], factor=13, save_path='x_after.png')
+plot_image_grid([rimg_noisy_np], factor=13, save_path='outputs/F16_GT_after_cpu.png')

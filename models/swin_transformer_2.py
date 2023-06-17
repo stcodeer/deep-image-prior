@@ -290,6 +290,125 @@ class SwinTransformerBlock(nn.Module):
         return flops
 
 
+class SwinMLPBlock(nn.Module):
+    r""" Swin MLP Block.
+
+    Args:
+        dim (int): Number of input channels.
+        input_resolution (tuple[int]): Input resulotion.
+        num_heads (int): Number of attention heads.
+        window_size (int): Window size.
+        shift_size (int): Shift size for SW-MSA.
+        mlp_ratio (float): Ratio of mlp hidden dim to embedding dim.
+        drop (float, optional): Dropout rate. Default: 0.0
+        drop_path (float, optional): Stochastic depth rate. Default: 0.0
+        act_layer (nn.Module, optional): Activation layer. Default: nn.GELU
+        norm_layer (nn.Module, optional): Normalization layer.  Default: nn.LayerNorm
+    """
+
+    def __init__(self, dim, input_resolution, num_heads, window_size=7, shift_size=0,
+                 mlp_ratio=4., qkv_bias=True, qk_scale=None, drop=0., attn_drop=0., drop_path=0.,
+                 act_layer=nn.GELU, norm_layer=nn.LayerNorm):
+        super().__init__()
+        self.dim = dim
+        self.input_resolution = input_resolution
+        self.num_heads = num_heads
+        self.window_size = window_size
+        self.shift_size = shift_size
+        self.mlp_ratio = mlp_ratio
+        if min(self.input_resolution) <= self.window_size:
+            # if window size is larger than input resolution, we don't partition windows
+            self.shift_size = 0
+            self.window_size = min(self.input_resolution)
+        assert 0 <= self.shift_size < self.window_size, "shift_size must in 0-window_size"
+
+        self.padding = [self.window_size - self.shift_size, self.shift_size,
+                        self.window_size - self.shift_size, self.shift_size]  # P_l,P_r,P_t,P_b
+
+        self.norm1 = norm_layer(dim)
+        # use group convolution to implement multi-head MLP
+        self.spatial_mlp = nn.Conv1d(self.num_heads * self.window_size ** 2,
+                                     self.num_heads * self.window_size ** 2,
+                                     kernel_size=1,
+                                     groups=self.num_heads)
+
+        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+        self.norm2 = norm_layer(dim)
+        mlp_hidden_dim = int(dim * mlp_ratio)
+        self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
+
+    def forward(self, x):
+        H, W = self.input_resolution
+        B, L, C = x.shape
+        assert L == H * W, "input feature has wrong size"
+
+        shortcut = x
+        x = self.norm1(x)
+        x = x.view(B, H, W, C)
+
+        # shift
+        if self.shift_size > 0:
+            P_l, P_r, P_t, P_b = self.padding
+            shifted_x = F.pad(x, [0, 0, P_l, P_r, P_t, P_b], "constant", 0)
+        else:
+            shifted_x = x
+        _, _H, _W, _ = shifted_x.shape
+
+        # partition windows
+        x_windows = window_partition(shifted_x, self.window_size)  # nW*B, window_size, window_size, C
+        x_windows = x_windows.view(-1, self.window_size * self.window_size, C)  # nW*B, window_size*window_size, C
+
+        # Window/Shifted-Window Spatial MLP
+        x_windows_heads = x_windows.view(-1, self.window_size * self.window_size, self.num_heads, C // self.num_heads)
+        x_windows_heads = x_windows_heads.transpose(1, 2)  # nW*B, nH, window_size*window_size, C//nH
+        x_windows_heads = x_windows_heads.reshape(-1, self.num_heads * self.window_size * self.window_size,
+                                                  C // self.num_heads)
+        spatial_mlp_windows = self.spatial_mlp(x_windows_heads)  # nW*B, nH*window_size*window_size, C//nH
+        spatial_mlp_windows = spatial_mlp_windows.view(-1, self.num_heads, self.window_size * self.window_size,
+                                                       C // self.num_heads).transpose(1, 2)
+        spatial_mlp_windows = spatial_mlp_windows.reshape(-1, self.window_size * self.window_size, C)
+
+        # merge windows
+        spatial_mlp_windows = spatial_mlp_windows.reshape(-1, self.window_size, self.window_size, C)
+        shifted_x = window_reverse(spatial_mlp_windows, self.window_size, _H, _W)  # B H' W' C
+
+        # reverse shift
+        if self.shift_size > 0:
+            P_l, P_r, P_t, P_b = self.padding
+            x = shifted_x[:, P_t:-P_b, P_l:-P_r, :].contiguous()
+        else:
+            x = shifted_x
+        x = x.view(B, H * W, C)
+
+        # FFN
+        x = shortcut + self.drop_path(x)
+        x = x + self.drop_path(self.mlp(self.norm2(x)))
+
+        return x
+
+    def extra_repr(self) -> str:
+        return f"dim={self.dim}, input_resolution={self.input_resolution}, num_heads={self.num_heads}, " \
+               f"window_size={self.window_size}, shift_size={self.shift_size}, mlp_ratio={self.mlp_ratio}"
+
+    def flops(self):
+        flops = 0
+        H, W = self.input_resolution
+        # norm1
+        flops += self.dim * H * W
+
+        # Window/Shifted-Window Spatial MLP
+        if self.shift_size > 0:
+            nW = (H / self.window_size + 1) * (W / self.window_size + 1)
+        else:
+            nW = H * W / self.window_size / self.window_size
+        flops += nW * self.dim * (self.window_size * self.window_size) * (self.window_size * self.window_size)
+        # mlp
+        flops += 2 * H * W * self.dim * self.dim * self.mlp_ratio
+        # norm2
+        flops += self.dim * H * W
+        return flops
+
+
 class PatchMerging(nn.Module):
     r""" Patch Merging Layer.
 
@@ -416,7 +535,7 @@ class BasicLayer(nn.Module):
         use_checkpoint (bool): Whether to use checkpointing to save memory. Default: False.
     """
 
-    def __init__(self, dim, input_resolution, depth, num_heads, window_size,
+    def __init__(self, core, dim, input_resolution, depth, num_heads, window_size,
                  mlp_ratio=4., qkv_bias=True, qk_scale=None, drop=0., attn_drop=0.,
                  drop_path=0., norm_layer=nn.LayerNorm, downsample=None, use_checkpoint=False):
 
@@ -425,10 +544,17 @@ class BasicLayer(nn.Module):
         self.input_resolution = input_resolution
         self.depth = depth
         self.use_checkpoint = use_checkpoint
+        
+        if core == 'transformer':
+            model_block = SwinTransformerBlock
+        elif core == 'mlp':
+            model_block = SwinMLPBlock
+        else:
+            assert False, "Wrong framework, should be in ('mlp', 'transformer')"
 
         # build blocks
         self.blocks = nn.ModuleList([
-            SwinTransformerBlock(dim=dim, input_resolution=input_resolution,
+            model_block(dim=dim, input_resolution=input_resolution,
                                  num_heads=num_heads, window_size=window_size,
                                  shift_size=0 if (i % 2 == 0) else window_size // 2,
                                  mlp_ratio=mlp_ratio,
@@ -486,7 +612,7 @@ class BasicLayer_up(nn.Module):
         use_checkpoint (bool): Whether to use checkpointing to save memory. Default: False.
     """
 
-    def __init__(self, dim, input_resolution, depth, num_heads, window_size,
+    def __init__(self, core, dim, input_resolution, depth, num_heads, window_size,
                  mlp_ratio=4., qkv_bias=True, qk_scale=None, drop=0., attn_drop=0.,
                  drop_path=0., norm_layer=nn.LayerNorm, upsample=None, use_checkpoint=False):
 
@@ -495,10 +621,17 @@ class BasicLayer_up(nn.Module):
         self.input_resolution = input_resolution
         self.depth = depth
         self.use_checkpoint = use_checkpoint
+        
+        if core == 'transformer':
+            model_block = SwinTransformerBlock
+        elif core == 'mlp':
+            model_block = SwinMLPBlock
+        else:
+            assert False, "Wrong framework, should be in ('mlp', 'transformer')"
 
         # build blocks
         self.blocks = nn.ModuleList([
-            SwinTransformerBlock(dim=dim, input_resolution=input_resolution,
+            model_block(dim=dim, input_resolution=input_resolution,
                                  num_heads=num_heads, window_size=window_size,
                                  shift_size=0 if (i % 2 == 0) else window_size // 2,
                                  mlp_ratio=mlp_ratio,
@@ -598,7 +731,7 @@ class SUNet(nn.Module):
         use_checkpoint (bool): Whether to use checkpointing to save memory. Default: False
     """
 
-    def __init__(self, img_size=224, patch_size=4, in_chans=3, out_chans=3,
+    def __init__(self, core='transformer', img_size=224, patch_size=4, in_chans=3, out_chans=3,
                  embed_dim=96, depths=[2, 2, 2, 2], num_heads=[3, 6, 12, 24],
                  window_size=7, mlp_ratio=4., qkv_bias=True, qk_scale=None,
                  drop_rate=0.0, attn_drop_rate=0.0, drop_path_rate=0.1,
@@ -659,7 +792,8 @@ class SUNet(nn.Module):
         # build encoder and bottleneck layers
         self.layers = nn.ModuleList()
         for i_layer in range(self.num_layers):
-            layer = BasicLayer(dim=int(embed_dim * 2 ** i_layer),
+            layer = BasicLayer(core=core,
+                               dim=int(embed_dim * 2 ** i_layer),
                                input_resolution=(patches_resolution[0] // (2 ** i_layer),
                                                  patches_resolution[1] // (2 ** i_layer)),
                                depth=depths[i_layer],
@@ -685,7 +819,8 @@ class SUNet(nn.Module):
                 layer_up = UpSample(input_resolution=patches_resolution[0] // (2 ** (self.num_layers - 1 - i_layer)),
                                     in_channels=int(embed_dim * 2 ** (self.num_layers - 1 - i_layer)), scale_factor=2)
             else:
-                layer_up = BasicLayer_up(dim=int(embed_dim * 2 ** (self.num_layers - 1 - i_layer)),
+                layer_up = BasicLayer_up(core=core,
+                                         dim=int(embed_dim * 2 ** (self.num_layers - 1 - i_layer)),
                                          input_resolution=(
                                              patches_resolution[0] // (2 ** (self.num_layers - 1 - i_layer)),
                                              patches_resolution[1] // (2 ** (self.num_layers - 1 - i_layer))),
@@ -709,9 +844,9 @@ class SUNet(nn.Module):
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
-        if isinstance(m, nn.Linear):
+        if isinstance(m, (nn.Linear, nn.Conv1d)):
             trunc_normal_(m.weight, std=.02)
-            if isinstance(m, nn.Linear) and m.bias is not None:
+            if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
         elif isinstance(m, nn.LayerNorm):
             nn.init.constant_(m.bias, 0)
@@ -801,18 +936,19 @@ class SUNet(nn.Module):
         return flops
 
 class SwinUnet2(nn.Module):
-    def __init__(self, img_size=512, in_chans=3, out_chans=3, window_size=16, wavelet_method='None'):
+    def __init__(self, core='transformer', img_size=512, in_chans=3, out_chans=3, window_size=16, depths=[2, 2, 2, 2], num_heads=[8, 8, 8, 8], wavelet_method='None'):
         super(SwinUnet2, self).__init__()
         
         # if enable_wavelet == True:
         #     windows_size = windows_size // 2
         
-        self.swin_unet = SUNet(img_size=img_size,
+        self.swin_unet = SUNet(core=core,
+                               img_size=img_size,
                                in_chans=in_chans,
                                out_chans=out_chans,
                                window_size=window_size,
-                               depths=[2, 2, 2, 2],
-                               num_heads=[8, 8, 8, 8],
+                               depths=depths,
+                               num_heads=num_heads,
                                wavelet_method=wavelet_method,
                                )
 

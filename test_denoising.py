@@ -7,7 +7,7 @@ log_file = open(log_path, "w")
 def denoising(hyperparameters):
     try:
         print('%s' % ('hyperparameters: ' + str(hyperparameters)))
-        os.system(r'python ./denoising.py %s %s %s %s %s %s %s %s %s %s %s %s' %hyperparameters)
+        os.system(r'python ./denoising.py %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s' %hyperparameters)
         
     except Exception as e:
         log_file.write('[Error] %s\n' % e)
@@ -34,7 +34,8 @@ PLOT = False
 
 NET_TYPE = 'SwinUnet2' # one of skip|ViT|SwinUnet2|Swin2Decoder|iformer_small|iformer_base|iformer_large
 
-exp_name = '_skip_nopixel_noprenoise_noqkscale'
+# exp_name = '_skip_nopixel_noprenoise_noqkscale'
+exp_name = '_mlp_skip_nopixel_noprenoise_noqkscale'
 
 wavelet_method = 'None' # 'None', 'haar', 'db5', 'db9', 'db13', 'db25', 'db37' (only enable when SwinUnet2)
 
@@ -42,27 +43,30 @@ INPUT = 'noise' # 'noise', meshgrid', 'fourier'
 
 OPTIMIZER = 'adam' # 'adam', 'LBFGS', 'adam_gradual_warmup'
 
-exp_weight = 0.99
+exp_weight = 0.99 # 0.99
 
+depths = 2222 # 2222 (only enable when SwinUnet2)
 
-for sigma in (75, 100):
-    for NET_TYPE in ('SwinUnet2', 'skip'):
-        
-        exp_name = '__skip_nopixel_noprenoise_noqkscale' + '_sgima' + str(sigma)
-        
-        denoising((
-            img_name,
-            num_iter,
-            sigma,
-            reg_noise_std,
-            show_every,
-            PLOT,
-            NET_TYPE,
-            exp_name,
-            wavelet_method,
-            INPUT,
-            OPTIMIZER,
-            exp_weight,
-        ))
+num_heads = 8888 # 8888 (only enable when SwinUnet2)
+
+core = 'mlp' # 'transformer', 'mlp' (only enable when SwinUnet2)
+
+denoising((
+    img_name,
+    num_iter,
+    sigma,
+    reg_noise_std,
+    show_every,
+    PLOT,
+    NET_TYPE,
+    exp_name,
+    wavelet_method,
+    INPUT,
+    OPTIMIZER,
+    exp_weight,
+    depths,
+    num_heads,
+    core,
+))
 
 log_file.close()
