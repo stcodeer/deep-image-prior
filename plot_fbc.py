@@ -1,20 +1,7 @@
-# !git clone https://github.com/DmitryUlyanov/deep-image-prior
-# !mv deep-image-prior/* ./
-
 from __future__ import print_function
 import matplotlib.pyplot as plt
 # %matplotlib inline
 
-import os
-# os.environ['CUDA_VISIBLE_DEVICES'] = '-1'  # run on CPU
-os.environ['CUDA_VISIBLE_DEVICES'] = '0' # run on GPU
-import numpy as np
-from models import *
-
-import torch
-import torch.optim
-
-from skimage.metrics import peak_signal_noise_ratio as compare_psnr
 from utils.measure_utils import *
 from utils.common_utils import *
 from utils.visualize_utils import *

@@ -6,6 +6,7 @@ from skimage.metrics import peak_signal_noise_ratio as compare_psnr
 
 plt.rcParams.update({'font.size': 18})
 
+
 def get_log2_data(file_name):
     file1 = open(file_name, 'r')
     Lines = file1.readlines()
@@ -56,6 +57,7 @@ def get_log_data(file_name):
 
     return loss_list, frequency_lists, np.array(psnr_list), np.array(ratio_list)
 
+
 def get_fbc_fig(all_norms,num_iter,ylim=1,save_path='',img_name=''):
     fig, ax = plt.subplots(figsize=(7,6))
     ax.set_xlim(0,num_iter)
@@ -104,6 +106,7 @@ def get_psnr_ratio_fig(all_datas,num_iter,ylim=35, ylabel='',save_path='',img_na
     # plt.show()
     plt.close()
     
+    
 def get_loss_fig(all_datas,num_iter,ylim=0.05, ylabel='',save_path='',img_name=''):
     fig, ax = plt.subplots(figsize=(7,6))
     ax.set_xlim(0, num_iter)
@@ -120,8 +123,8 @@ def get_loss_fig(all_datas,num_iter,ylim=0.05, ylabel='',save_path='',img_name='
     # plt.show()
     plt.close()
     
-def plot_frequency_figure(img, plot=False, save_path='default'):
-
+    
+def plot_frequency_distribution(img, size=0.2, scale='log', lim=-1, plot=False, save_path='default'):
     if len(img.shape)==3:
         img = rgb2gray(img)
 
@@ -147,11 +150,17 @@ def plot_frequency_figure(img, plot=False, save_path='default'):
     index = [distribution[i][0] for i in range(len(distribution))]
     value = [distribution[i][1] for i in range(len(distribution))]
     
-    # plot frequency distribution
     fig, ax = plt.subplots(figsize=(7,6))
-    ax.set_ylim(0, 1000)
+    
+    plt.yscale(scale)
+    
+    if not lim == -1:
+        ax.set_ylim(0, lim)
     
     plt.plot(index, value, '.')
+    
+    for sz in np.linspace(size, 1, int(1/size)):
+        plt.axvline(center[0]*sz, c='r', ls='-.')
     
     if not save_path == 'default': 
         plt.savefig(save_path+'_distribution.png')
@@ -160,12 +169,24 @@ def plot_frequency_figure(img, plot=False, save_path='default'):
         plt.show()
     plt.close()
     
-    # plot frequency brightness figure
-    limited_ftimage = np.clip(ftimage, 0, 100)
     
-    limited_ftimage = np.expand_dims(limited_ftimage, 0)
+def plot_frequency_figure(img, scale='log', lim=-1, plot=False, save_path='default'):
+    if len(img.shape)==3:
+        img = rgb2gray(img)
+
+    ftimage = np.fft.fft2(img)
+    ftimage = abs(np.fft.fftshift(ftimage))
     
-    plot_image_grid([limited_ftimage], 7, 6, plot=plot, save_path=save_path+'_frequency.png' if not save_path=='default' else 'default')
+    if scale == 'log':
+        ftimage = np.log10(ftimage)
+    
+    if not lim == -1:
+        ftimage = np.clip(ftimage, 0, lim)
+    
+    ftimage = np.expand_dims(ftimage, 0)
+    
+    plot_image_grid([ftimage], 7, 6, plot=plot, save_path=save_path+'_frequency.png' if not save_path=='default' else 'default')
+    
     
 def plot_filtered_figure(img, img_gt, size=0.2, plot=False, save_path='default'):
     if len(img.shape)==3:
@@ -199,4 +220,28 @@ def plot_filtered_figure(img, img_gt, size=0.2, plot=False, save_path='default')
         filtered_img = np.expand_dims(filtered_img, 0)
         
         plot_image_grid([filtered_img], 7, 6, plot=plot, title='PSNR_GT: '+str(psnr_gt), save_path=save_path+'_filtered_'+str(sz)[0:3]+'.png' if not save_path=='default' else 'default')
+        
+
+def plot_fbc_variance(x, ys, lim=-1, labels='default', plot=False, save_path='default'):
+    
+    fig, ax = plt.subplots(figsize=(7,6))
+    
+    
+    if not lim == -1:
+        ax.set_ylim(0, lim)
+        
+    c = ['r','g','b','k']
+    # ls = ['-.', '-', '.', '--']
+    
+    for i, y in enumerate(ys):
+        plt.plot(x, y, '.', label=labels[i], c=c[i])
+        
+    plt.legend(loc='lower right')
+    
+    if not save_path == 'default': 
+        plt.savefig(save_path)
+    if plot:
+        print("plotting...")
+        plt.show()
+    plt.close()
         
