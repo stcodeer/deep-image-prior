@@ -98,6 +98,13 @@ def get_psnr_ratio_fig(all_datas,num_iter,ylim=35, ylabel='',save_path='',img_na
 
     rate = 1
     for i in range(len(all_datas)):
+        if i == 0:
+            y_max = np.max(all_datas[i])
+            y_max_idx = np.argmax(all_datas[i])
+            
+            plt.axhline(y_max, c=color_list[i], ls='-.')
+            plt.axvline(y_max_idx, c=color_list[i], ls='-.')
+            
         plt.plot(range(0,num_iter,rate), all_datas[i][0:num_iter:rate], linewidth=4, color=color_list[i], label=label_list[i])
 
     plt.legend(loc=0,)
@@ -222,21 +229,34 @@ def plot_filtered_figure(img, img_gt, size=0.2, plot=False, save_path='default')
         plot_image_grid([filtered_img], 7, 6, plot=plot, title='PSNR_GT: '+str(psnr_gt), save_path=save_path+'_filtered_'+str(sz)[0:3]+'.png' if not save_path=='default' else 'default')
         
 
-def plot_fbc_variance(x, ys, lim=-1, labels='default', plot=False, save_path='default'):
+def plot_fbc_stats(x, ys, lim=-1, title='default', labels='default', plot=False, plotlim=False, save_path='default'):
     
-    fig, ax = plt.subplots(figsize=(7,6))
+    fig, ax = plt.subplots(figsize=(30,15))
     
-    
-    if not lim == -1:
-        ax.set_ylim(0, lim)
+    if not title == 'default':
+        ax.set_title(title, loc='left')
         
-    c = ['r','g','b','k']
+    c = ['r', 'g', 'b', 'k', 'y', 'c', 'm']
     # ls = ['-.', '-', '.', '--']
     
     for i, y in enumerate(ys):
-        plt.plot(x, y, '.', label=labels[i], c=c[i])
+        ax = plt.subplot(2, 4, i+1)
         
-    plt.legend(loc='lower right')
+        if isinstance(lim, list) or isinstance(lim, tuple):
+            ax.set_ylim(lim[0], lim[1])
+        elif not lim == -1:
+                ax.set_ylim(0, lim)
+        
+        if plotlim:
+            y_max = np.max(y)
+            y_max_idx = np.argmax(y)
+            plt.axhline(y_max, c='r', ls='-.')
+            plt.axvline(y_max_idx, c='r', ls='-.')
+            
+        plt.plot(x, y, '.', label=labels[i], c=c[0])
+        
+        plt.legend(loc='lower right')
+        
     
     if not save_path == 'default': 
         plt.savefig(save_path)
