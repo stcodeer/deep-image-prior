@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.utils.checkpoint as checkpoint
+
 from einops import rearrange
 from timm.models.layers import DropPath, to_2tuple, trunc_normal_
 
@@ -75,7 +77,7 @@ class WindowAttention(nn.Module):
         proj_drop (float, optional): Dropout ratio of output. Default: 0.0
     """
 
-    def __init__(self, dim, window_size, num_heads, qkv_bias=True, qk_scale=None, attn_drop=0., proj_drop=0.):
+    def __init__(self, dim, window_size, num_heads, qkv_bias=True, qk_scale=None, attn_drop=0., proj_drop=0., attn_scale=False):
         
         import warnings
         warnings.filterwarnings('ignore')
@@ -86,6 +88,7 @@ class WindowAttention(nn.Module):
         self.num_heads = num_heads
         head_dim = dim // num_heads
         self.scale = qk_scale or head_dim ** -0.5
+        self.attn_scale = attn_scale
 
         # define a parameter table of relative position bias
         self.relative_position_bias_table = nn.Parameter(
@@ -103,7 +106,10 @@ class WindowAttention(nn.Module):
         relative_coords[:, :, 0] *= 2 * self.window_size[1] - 1
         relative_position_index = relative_coords.sum(-1)  # Wh*Ww, Wh*Ww
         self.register_buffer("relative_position_index", relative_position_index)
-
+        
+        if self.attn_scale == True:
+            self.lamb = nn.Parameter(torch.zeros(num_heads), requires_grad=True)
+            
         self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
         self.attn_drop = nn.Dropout(attn_drop)
         self.proj = nn.Linear(dim, dim)
@@ -137,6 +143,13 @@ class WindowAttention(nn.Module):
             attn = self.softmax(attn)
         else:
             attn = self.softmax(attn)
+        
+        if self.attn_scale == True:
+            attn_d = torch.ones(attn.shape[-2:], device=attn.device) / N    # [l, l]
+            attn_d = attn_d[None, None, ...]                                # [B, N, l, l]
+            attn_h = attn - attn_d                                          # [B, N, l, l]
+            attn_h = attn_h * (1. + self.lamb[None, :, None, None])         # [B, N, l, l]
+            attn = attn_d + attn_h                                          # [B, N, l, l]
 
         attn = self.attn_drop(attn)
 
@@ -155,6 +168,9 @@ class WindowAttention(nn.Module):
         flops += N * self.dim * 3 * self.dim
         # attn = (q @ k.transpose(-2, -1))
         flops += self.num_heads * N * (self.dim // self.num_heads) * N
+        # attnscale
+        if self.attn_scale == True:
+            flops += self.num_heads * N * N
         #  x = (attn @ v)
         flops += self.num_heads * N * N * (self.dim // self.num_heads)
         # x = self.proj(x)
@@ -162,7 +178,7 @@ class WindowAttention(nn.Module):
         return flops
 
 
-class SwinTransformerBlock(nn.Module):
+class SwinBlock(nn.Module):
     r""" Swin Transformer Block.
 
     Args:
@@ -181,16 +197,20 @@ class SwinTransformerBlock(nn.Module):
         norm_layer (nn.Module, optional): Normalization layer.  Default: nn.LayerNorm
     """
 
-    def __init__(self, dim, input_resolution, num_heads, window_size=7, shift_size=0,
+    def __init__(self, core, dim, input_resolution, num_heads, window_size=7, shift_size=0,
                  mlp_ratio=4., qkv_bias=True, qk_scale=None, drop=0., attn_drop=0., drop_path=0.,
-                 act_layer=nn.GELU, norm_layer=nn.LayerNorm):
+                 act_layer=nn.GELU, norm_layer=nn.LayerNorm,
+                 feat_scale=False, attn_scale=False):
         super().__init__()
+        self.core = core
         self.dim = dim
         self.input_resolution = input_resolution
         self.num_heads = num_heads
         self.window_size = window_size
         self.shift_size = shift_size
         self.mlp_ratio = mlp_ratio
+        self.feat_scale = feat_scale
+        
         if min(self.input_resolution) <= self.window_size:
             # if window size is larger than input resolution, we don't partition windows
             self.shift_size = 0
@@ -198,10 +218,27 @@ class SwinTransformerBlock(nn.Module):
         assert 0 <= self.shift_size < self.window_size, "shift_size must in 0-window_size"
 
         self.norm1 = norm_layer(dim)
-        self.attn = WindowAttention(
+        if self.core == 'transformer':
+            # W-MSA/SW-MSA
+            self.attn = WindowAttention(
             dim, window_size=to_2tuple(self.window_size), num_heads=num_heads,
-            qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop)
-
+            qkv_bias=qkv_bias, qk_scale=qk_scale, attn_drop=attn_drop, proj_drop=drop,
+            attn_scale=attn_scale)
+        
+        elif self.core == 'mlp':
+            # Full Connection Layer
+            # self.linear = nn.Linear(dim * self.window_size * self.window_size, dim * self.window_size * self.window_size)
+            
+            # use group convolution to implement multi-head MLP
+            self.spatial_mlp = nn.Conv1d(self.num_heads * self.window_size ** 2,
+                                        self.num_heads * self.window_size ** 2,
+                                        kernel_size=1,
+                                        groups=self.num_heads)
+            
+        elif self.core == 'cnn':
+            # Convolutional Layer
+            self.conv2d = nn.Conv2d(dim, dim, kernel_size=3, padding=1)
+            
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
@@ -231,6 +268,15 @@ class SwinTransformerBlock(nn.Module):
             attn_mask = None
 
         self.register_buffer("attn_mask", attn_mask)
+        
+        if self.feat_scale == True:
+            self.lamb1 = nn.Parameter(torch.zeros(dim), requires_grad=True) 
+            self.lamb2 = nn.Parameter(torch.zeros(dim), requires_grad=True)
+
+    def freq_decompose(self, x):
+        x_d = torch.mean(x, -2, keepdim=True) # [bs, 1, dim]
+        x_h = x - x_d # high freq [bs, len, dim]
+        return x_d, x_h
 
     def forward(self, x):
         H, W = self.input_resolution
@@ -251,9 +297,34 @@ class SwinTransformerBlock(nn.Module):
         x_windows = window_partition(shifted_x, self.window_size)  # nW*B, window_size, window_size, C
         x_windows = x_windows.view(-1, self.window_size * self.window_size, C)  # nW*B, window_size*window_size, C
 
-        # W-MSA/SW-MSA
-        attn_windows = self.attn(x_windows, mask=self.attn_mask)  # nW*B, window_size*window_size, C
-
+        if self.core == 'transformer':
+            # W-MSA/SW-MSA
+            attn_windows = self.attn(x_windows, mask=self.attn_mask)  # nW*B, window_size*window_size, C
+        
+        elif self.core == 'mlp':
+            # Full Connection Layer
+            # x_windows = x_windows.view(x_windows.size(0), -1)
+            # attn_windows = self.linear(x_windows)
+            # attn_windows = attn_windows.view(-1, self.window_size * self.window_size, C)
+            
+            x_windows_heads = x_windows.view(-1, self.window_size * self.window_size, self.num_heads, C // self.num_heads)
+            x_windows_heads = x_windows_heads.transpose(1, 2)  # nW*B, nH, window_size*window_size, C//nH
+            x_windows_heads = x_windows_heads.reshape(-1, self.num_heads * self.window_size * self.window_size,
+                                                    C // self.num_heads)
+            spatial_mlp_windows = self.spatial_mlp(x_windows_heads)  # nW*B, nH*window_size*window_size, C//nH
+            spatial_mlp_windows = spatial_mlp_windows.view(-1, self.num_heads, self.window_size * self.window_size,
+                                                        C // self.num_heads).transpose(1, 2)
+            attn_windows = spatial_mlp_windows.reshape(-1, self.window_size * self.window_size, C)
+            
+        elif self.core == 'cnn':
+            # Convolutional Layer
+            x_windows = x_windows.view(-1, C, self.window_size, self.window_size)
+            attn_windows = self.conv2d(x_windows)
+            attn_windows = attn_windows.view(-1, self.window_size * self.window_size, C)
+        
+        elif self.core == 'None':
+            attn_windows = x_windows
+            
         # merge windows
         attn_windows = attn_windows.view(-1, self.window_size, self.window_size, C)
         shifted_x = window_reverse(attn_windows, self.window_size, H, W)  # B H' W' C
@@ -265,6 +336,12 @@ class SwinTransformerBlock(nn.Module):
             x = shifted_x
         x = x.view(B, H * W, C)
 
+        if self.feat_scale == True:
+            x_d, x_h = self.freq_decompose(x)
+            x_d = x_d * self.lamb1
+            x_h = x_h * self.lamb2
+            x = x + x_d + x_h
+        
         # FFN
         x = shortcut + self.drop_path(x)
         x = x + self.drop_path(self.mlp(self.norm2(x)))
@@ -283,6 +360,9 @@ class SwinTransformerBlock(nn.Module):
         # W-MSA/SW-MSA
         nW = H * W / self.window_size / self.window_size
         flops += nW * self.attn.flops(self.window_size * self.window_size)
+        # FeatScale
+        if self.feat_scale == True:
+            flops += self.dim * H * W * 2
         # mlp
         flops += 2 * H * W * self.dim * self.dim * self.mlp_ratio
         # norm2
@@ -290,7 +370,7 @@ class SwinTransformerBlock(nn.Module):
         return flops
 
 
-class SwinMLPBlock(nn.Module):
+class SwinMHMLPBlock(nn.Module):
     r""" Swin MLP Block.
 
     Args:
@@ -306,9 +386,10 @@ class SwinMLPBlock(nn.Module):
         norm_layer (nn.Module, optional): Normalization layer.  Default: nn.LayerNorm
     """
 
-    def __init__(self, dim, input_resolution, num_heads, window_size=7, shift_size=0,
+    def __init__(self, core, dim, input_resolution, num_heads, window_size=7, shift_size=0,
                  mlp_ratio=4., qkv_bias=True, qk_scale=None, drop=0., attn_drop=0., drop_path=0.,
-                 act_layer=nn.GELU, norm_layer=nn.LayerNorm):
+                 act_layer=nn.GELU, norm_layer=nn.LayerNorm,
+                 feat_scale=False, attn_scale=False):
         super().__init__()
         self.dim = dim
         self.input_resolution = input_resolution
@@ -537,7 +618,8 @@ class BasicLayer(nn.Module):
 
     def __init__(self, core, dim, input_resolution, depth, num_heads, window_size,
                  mlp_ratio=4., qkv_bias=True, qk_scale=None, drop=0., attn_drop=0.,
-                 drop_path=0., norm_layer=nn.LayerNorm, downsample=None, use_checkpoint=False):
+                 drop_path=0., norm_layer=nn.LayerNorm, downsample=None, use_checkpoint=False,
+                 feat_scale=False, attn_scale=False):
 
         super().__init__()
         self.dim = dim
@@ -545,23 +627,27 @@ class BasicLayer(nn.Module):
         self.depth = depth
         self.use_checkpoint = use_checkpoint
         
-        if core == 'transformer':
-            model_block = SwinTransformerBlock
-        elif core == 'mlp':
-            model_block = SwinMLPBlock
+        if core in ('None', 'transformer', 'mlp', 'cnn'):
+            model_block = SwinBlock
+        elif core == 'multi_head_mlp':
+            model_block = SwinMHMLPBlock
         else:
-            assert False, "Wrong framework, should be in ('mlp', 'transformer')"
+            assert False, "Wrong framework, should be in ('None', 'transformer','multi_head_mlp', 'mlp', 'cnn')"
 
         # build blocks
         self.blocks = nn.ModuleList([
-            model_block(dim=dim, input_resolution=input_resolution,
+            model_block(
+                                 core=core,
+                                 dim=dim,
+                                 input_resolution=input_resolution,
                                  num_heads=num_heads, window_size=window_size,
                                  shift_size=0 if (i % 2 == 0) else window_size // 2,
                                  mlp_ratio=mlp_ratio,
                                  qkv_bias=qkv_bias, qk_scale=qk_scale,
                                  drop=drop, attn_drop=attn_drop,
                                  drop_path=drop_path[i] if isinstance(drop_path, list) else drop_path,
-                                 norm_layer=norm_layer)
+                                 norm_layer=norm_layer,
+                                 feat_scale=feat_scale, attn_scale=attn_scale)
             for i in range(depth)])
 
         # patch merging layer
@@ -614,7 +700,8 @@ class BasicLayer_up(nn.Module):
 
     def __init__(self, core, dim, input_resolution, depth, num_heads, window_size,
                  mlp_ratio=4., qkv_bias=True, qk_scale=None, drop=0., attn_drop=0.,
-                 drop_path=0., norm_layer=nn.LayerNorm, upsample=None, use_checkpoint=False):
+                 drop_path=0., norm_layer=nn.LayerNorm, upsample=None, use_checkpoint=False,
+                 feat_scale=False, attn_scale=False):
 
         super().__init__()
         self.dim = dim
@@ -622,23 +709,27 @@ class BasicLayer_up(nn.Module):
         self.depth = depth
         self.use_checkpoint = use_checkpoint
         
-        if core == 'transformer':
-            model_block = SwinTransformerBlock
-        elif core == 'mlp':
-            model_block = SwinMLPBlock
+        if core in ('None', 'transformer', 'mlp', 'cnn'):
+            model_block = SwinBlock
+        elif core == 'multi_head_mlp':
+            model_block = SwinMHMLPBlock
         else:
-            assert False, "Wrong framework, should be in ('mlp', 'transformer')"
+            assert False, "Wrong framework, should be in ('None', 'transformer','multi_head_mlp', 'mlp', 'cnn')"
 
         # build blocks
         self.blocks = nn.ModuleList([
-            model_block(dim=dim, input_resolution=input_resolution,
+            model_block(         
+                                 core=core,
+                                 dim=dim,
+                                 input_resolution=input_resolution,
                                  num_heads=num_heads, window_size=window_size,
                                  shift_size=0 if (i % 2 == 0) else window_size // 2,
                                  mlp_ratio=mlp_ratio,
                                  qkv_bias=qkv_bias, qk_scale=qk_scale,
                                  drop=drop, attn_drop=attn_drop,
                                  drop_path=drop_path[i] if isinstance(drop_path, list) else drop_path,
-                                 norm_layer=norm_layer)
+                                 norm_layer=norm_layer,
+                                 feat_scale=feat_scale, attn_scale=attn_scale)
             for i in range(depth)])
 
         # patch merging layer
@@ -738,6 +829,7 @@ class SUNet(nn.Module):
                  norm_layer=nn.LayerNorm, ape=False, patch_norm=True,
                  use_checkpoint=False, 
                  wavelet_method='None',
+                 feat_scale=False, attn_scale=False,
                  **kwargs):
         super(SUNet, self).__init__()
 
@@ -805,7 +897,8 @@ class SUNet(nn.Module):
                                drop_path=dpr[sum(depths[:i_layer]):sum(depths[:i_layer + 1])],
                                norm_layer=norm_layer,
                                downsample=PatchMerging if (i_layer < self.num_layers - 1) else None,
-                               use_checkpoint=use_checkpoint)
+                               use_checkpoint=use_checkpoint,
+                               feat_scale=feat_scale, attn_scale=attn_scale)
             self.layers.append(layer)
 
         # build decoder layers
@@ -834,7 +927,8 @@ class SUNet(nn.Module):
                                              depths[:(self.num_layers - 1 - i_layer) + 1])],
                                          norm_layer=norm_layer,
                                          upsample=UpSample if (i_layer < self.num_layers - 1) else None,
-                                         use_checkpoint=use_checkpoint)
+                                         use_checkpoint=use_checkpoint,
+                                         feat_scale=feat_scale, attn_scale=attn_scale)
             self.layers_up.append(layer_up)
             self.concat_back_dim.append(concat_linear)
 
@@ -879,7 +973,6 @@ class SUNet(nn.Module):
 
     # Dencoder and Skip connection
     def forward_up_features(self, x, x_downsample):
-    # def forward_up_features(self, x):
         for inx, layer_up in enumerate(self.layers_up):
             if inx == 0:
                 x = layer_up(x)
@@ -936,7 +1029,12 @@ class SUNet(nn.Module):
         return flops
 
 class SwinUnet2(nn.Module):
-    def __init__(self, core='transformer', img_size=512, in_chans=3, out_chans=3, window_size=16, depths=[2, 2, 2, 2], num_heads=[8, 8, 8, 8], wavelet_method='None'):
+    def __init__(self, core='transformer',
+                 img_size=512, in_chans=3, out_chans=3, window_size=16,
+                 depths=[2, 2, 2, 2], num_heads=[8, 8, 8, 8],
+                 wavelet_method='None',
+                 feat_scale=False, attn_scale=False,
+                 ):
         super(SwinUnet2, self).__init__()
         
         # if enable_wavelet == True:
@@ -950,6 +1048,8 @@ class SwinUnet2(nn.Module):
                                depths=depths,
                                num_heads=num_heads,
                                wavelet_method=wavelet_method,
+                               feat_scale=feat_scale,
+                               attn_scale=attn_scale,
                                )
 
     def forward(self, x):

@@ -14,18 +14,28 @@ img_name = 'F16_GT'
 
 num_iter = 20000
 
+# file_names = [
+#     'F16_GT_SwinUnet2_20000_noise_skip_nopixel_noprenoise_noqkscale',
+#     'skip/F16_GT_skip_1000_noise_skip_noprenoise',
+#     'F16_GT_SwinUnet2_20000_noise_mhmlp_skip_nopixel_noprenoise_noqkscale_pad',
+#     'F16_GT_SwinUnet2_20000_noise_none_skip_nopixel_noprenoise_noqkscale',
+#     'F16_GT_SwinUnet2_20000_noise_mlp_skip_nopixel_noprenoise_noqkscale_position_wise',
+#     'F16_GT_SwinUnet2_20000_noise_mhmlp_skip_nopixel_noprenoise_noqkscale_roll',
+#     'F16_GT_SwinUnet2_20000_noise_cnn_skip_nopixel_noprenoise_noqkscale_1d',
+#     'F16_GT_SwinUnet2_20000_noise_cnn_skip_nopixel_noprenoise_noqkscale_2d',
+#     ]
+
+# labels=['Transformer', 'skip', 'MHMLP_pad', 'None', 'position wise MLP', 'MHMLP_roll', 'CNN1d', 'CNN2d']
+
 file_names = [
-    'F16_GT_SwinUnet2_20000_noise_skip_nopixel_noprenoise_noqkscale',
-    'skip/F16_GT_skip_1000_noise_skip_noprenoise',
-    'F16_GT_SwinUnet2_20000_noise_mhmlp_skip_nopixel_noprenoise_noqkscale_pad',
-    'F16_GT_SwinUnet2_20000_noise_none_skip_nopixel_noprenoise_noqkscale',
-    'F16_GT_SwinUnet2_20000_noise_mlp_skip_nopixel_noprenoise_noqkscale_position_wise',
-    'F16_GT_SwinUnet2_20000_noise_mhmlp_skip_nopixel_noprenoise_noqkscale_roll',
-    'F16_GT_SwinUnet2_20000_noise_cnn_skip_nopixel_noprenoise_noqkscale_1d',
-    'F16_GT_SwinUnet2_20000_noise_cnn_skip_nopixel_noprenoise_noqkscale_2d',
+    'F16_GT_SwinUnet2_20000_noise_skip_nopixel_noprenoise_noqkscale_50fbc',
+    'skip/F16_GT_skip_1000_noise_skip_noprenoise_50fbc',
+    'F16_GT_SwinUnet2_20000_noise_none_skip_nopixel_noprenoise_noqkscale_50fbc',
+    'F16_GT_SwinUnet2_20000_noise_mhmlp_skip_nopixel_noprenoise_noqkscale_roll_50fbc',
+    'F16_GT_SwinUnet2_20000_noise_cnn_skip_nopixel_noprenoise_noqkscale_2d_50fbc',
     ]
 
-labels=['Transformer', 'skip', 'MHMLP_pad', 'None', 'position wise MLP', 'MHMLP_roll', 'CNN1d', 'CNN2d']
+labels=['Transformer', 'skip', 'None', 'MHMLP_roll', 'CNN2d']
 
 # file_names = [
 #     'testape+embedpadding/F16_GT_SwinUnet2_20000_noise_skip_nopixel_noprenoise_noqkscale',
@@ -42,10 +52,10 @@ f_kurtosis = []
 f_kurtosis2 = []
 
 for i, file_name in enumerate(file_names):
-    log_path = 'outputs/' + file_name + '/logs_%s.txt'%img_name
-    log2_path = 'outputs/' + file_name + '/logs2_%s.txt'%img_name
-    loss_list, frequency_lists, psnr_list, ratio_list = get_log_data(log_path)
-    frequency_lists2 = get_log2_data(log2_path)
+    log_path = 'outputs/figs_core/' + file_name + '/logs_%s.txt'%img_name
+    log2_path = 'outputs/figs_core/' + file_name + '/logs2_%s.txt'%img_name
+    frequency_lists = get_frequency_data(log_path, size=0.02)
+    frequency_lists2 = get_frequency_data(log2_path, size=0.02)
     
     frequency_lists = frequency_lists + (num_iter - len(frequency_lists)) * [[-100]]
     frequency_lists2 = frequency_lists2 + (num_iter - len(frequency_lists2)) * [[-100]]
@@ -80,11 +90,11 @@ for i, file_name in enumerate(file_names):
     f_kurtosis.append(kurtosis)
     f_kurtosis2.append(kurtosis2)
 
-plot_fbc_stats(range(num_iter), f_variance, lim=0.16, title='variance', labels=labels, plotlim=True, save_path='outputs/core_noise_fbc_variance.png')
-plot_fbc_stats(range(num_iter), f_variance2, lim=0.16, title='variance', labels=labels, plotlim=True, save_path='outputs/core_origin_fbc_variance.png')
+plot_fbc_stats(range(num_iter), f_variance, nums=(1, 5), lim=0.16, title='variance', labels=labels, plotlim=True, save_path='outputs/5core_noise_fbc_variance_50fbc.png')
+plot_fbc_stats(range(num_iter), f_variance2, nums=(1, 5), lim=0.16, title='variance', labels=labels, plotlim=True, save_path='outputs/5core_origin_fbc_variance_50fbc.png')
 
-plot_fbc_stats(range(num_iter), f_skewness, lim=(-0.5, 1.5), title='skewness', labels=labels, save_path='outputs/core_noise_fbc_skewness.png')
-plot_fbc_stats(range(num_iter), f_skewness2, lim=(-0.5, 1.5), title='skewness', labels=labels, save_path='outputs/core_origin_fbc_skewness.png')
+plot_fbc_stats(range(num_iter), f_skewness, nums=(1, 5), lim=(-1, 5), title='skewness', labels=labels, save_path='outputs/5core_noise_fbc_skewness_50fbc.png')
+plot_fbc_stats(range(num_iter), f_skewness2, nums=(1, 5), lim=(-1, 5), title='skewness', labels=labels, save_path='outputs/5core_origin_fbc_skewness_50fbc.png')
 
-plot_fbc_stats(range(num_iter), f_kurtosis, lim=(-2, 0), title='kurtosis', labels=labels, save_path='outputs/core_noise_fbc_kurtosis.png')
-plot_fbc_stats(range(num_iter), f_kurtosis2, lim=(-2, 0), title='kurtosis', labels=labels, save_path='outputs/core_origin_fbc_kurtosis.png')
+plot_fbc_stats(range(num_iter), f_kurtosis, nums=(1, 5), lim=(-2, 25), title='kurtosis', labels=labels, save_path='outputs/5core_noise_fbc_kurtosis_50fbc.png')
+plot_fbc_stats(range(num_iter), f_kurtosis2, nums=(1, 5), lim=(-2, 25), title='kurtosis', labels=labels, save_path='outputs/5core_origin_fbc_kurtosis_50fbc.png')

@@ -51,6 +51,9 @@ exp_weight = float(sys.argv[12])
 depths = [int(sys.argv[13][i]) for i in range(4)]
 num_heads = [int(sys.argv[14][i]) for i in range(4)]
 core = sys.argv[15]
+fbc_size = float(sys.argv[16])
+feat_scale = bool(strtobool(sys.argv[17]))
+attn_scale = bool(strtobool(sys.argv[18]))
 
 pad = 'reflection'
 OPT_OVER = 'net' # 'net,input'
@@ -81,22 +84,28 @@ log_file = open(log_path, "w")
 log2_path = file_name + '/logs2_%s.txt'%img_name
 log2_file = open(log2_path, "w")
 
+# log3_path = file_name + '/logs3_%s.txt'%img_name
+# log3_file = open(log3_path, "w")
+
+# log_gray_path = file_name + '/logs_gray.txt'
+# log_gray_file = open(log_gray_path, "w")
+
 result_path = file_name + '/result_%s.txt'%img_name
 result_file = open(result_path, "w")
 
 # load data
 
-if fname == 'data/denoising/snail.jpg':
-    img_noisy_pil = crop_image(get_image(fname, imsize)[0], d=32)
-    img_noisy_np = pil_to_np(img_noisy_pil)
+# if fname == 'data/denoising/snail.jpg':
+#     img_noisy_pil = crop_image(get_image(fname, imsize)[0], d=32)
+#     img_noisy_np = pil_to_np(img_noisy_pil)
     
-    # As we don't have ground truth
-    img_pil = img_noisy_pil
-    img_np = img_noisy_np
+#     # As we don't have ground truth
+#     img_pil = img_noisy_pil
+#     img_np = img_noisy_np
     
-    plot_image_grid([img_np], 4, 5, plot=PLOT)
+#     plot_image_grid([img_np], 4, 5, plot=PLOT)
         
-elif fname == 'data/denoising/F16_GT.png':
+if fname == 'data/denoising/F16_GT.png':
     # Add synthetic noise
     img_pil = crop_image(get_image(fname, imsize)[0], d=32)
     # img_pil = img_pil.crop((0, 0, 256, 256))
@@ -104,10 +113,26 @@ elif fname == 'data/denoising/F16_GT.png':
     
     img_noisy_pil, img_noisy_np = get_noisy_image(img_np, sigma_)
     
+    # noisy_np = img_noisy_np - img_np
+    
     plot_image_grid([img_np, img_noisy_np], 4, 6, plot=PLOT)
+    
 else:
     assert False
 
+
+# rgb to gray
+
+# img_np = img_np.transpose(1, 2, 0)
+# img_noisy_np = img_noisy_np.transpose(1, 2, 0)
+
+# img_np = np.expand_dims(rgb2gray(img_np), 0)
+# img_noisy_np = np.expand_dims(rgb2gray(img_noisy_np), 0)
+
+# log_gray_file.write(str(img_np.tolist())+'\n')
+# log_gray_file.write(str(img_noisy_np.tolist()))
+
+# log_gray_file.close()
 
 
 # if fname == 'data/denoising/snail.jpg':
@@ -136,6 +161,7 @@ if fname == 'data/denoising/F16_GT.png':
         input_depth = 32 # should be 32
         
         net = get_net(input_depth, 'skip', pad,
+                    n_channels=img_np.shape[0],
                     skip_n33d=128, 
                     skip_n33u=128, 
                     skip_n11=4, 
@@ -161,11 +187,13 @@ if fname == 'data/denoising/F16_GT.png':
                         core=core,
                         img_size=img_np.shape[1],
                         in_chans=input_depth,
-                        out_chans=3,
+                        out_chans=img_np.shape[0],
                         window_size=16,
                         wavelet_method=wavelet_method,
                         depths=depths,
                         num_heads=num_heads,
+                        feat_scale=feat_scale,
+                        attn_scale=attn_scale,
                         ).type(dtype)
         
         if OPTIMIZER == 'adam_gradual_warmup':
@@ -253,10 +281,12 @@ def closure():
     pre_img = pre_img.transpose(1, 2, 0)
     noisy_img = img_noisy_np.transpose(1, 2, 0)
     img = img_np.transpose(1, 2, 0)
+    # noisy = noisy_np.transpose(1, 2, 0)
     
     #frequency-band correspondence metric
-    avg_mask_it = get_circular_statastic(pre_img, noisy_img,  size=0.2)
-    avg_mask_it2 = get_circular_statastic(pre_img, img, size=0.2)
+    avg_mask_it = get_circular_statastic(pre_img, noisy_img,  size=fbc_size)
+    avg_mask_it2 = get_circular_statastic(pre_img, img, size=fbc_size)
+    # avg_mask_it3 = get_circular_statastic(pre_img, noisy, size=fbc_size)
     
     #automatic stopping
     blur_it = PerceptualBlurMetric(pre_img)#the blurriness of the output image
@@ -268,8 +298,10 @@ def closure():
     print ('Iteration %05d    Loss %f   PSNR_noisy: %f   PSRN_gt: %f PSNR_gt_sm: %f' % (i, total_loss.item(), psrn_noisy, psrn_gt, psrn_gt_sm), '\r', end='')
     log_file.write('Iteration: %05d, Loss: %f, PSRN_gt: %f, mask: %s, ratio: %f\n' % (i, total_loss.item(), psrn_gt, avg_mask_it, ratio_it))
     log2_file.write('%s\n' % (avg_mask_it2))
+    # log3_file.write('%s\n' % (avg_mask_it3))
     log_file.flush()
     log2_file.flush()
+    # log3_file.flush()
     # if  (i <= 5000 and i % show_every == 0) or (psrn_gt > 30 and psrn_gt > max_psnr + 0.02):
     if i % show_every == 0:
         out_np = torch_to_np(out)
@@ -307,6 +339,7 @@ optimize(OPTIMIZER, p, closure, LR, num_iter, LR_min)
 
 log_file.close()
 log2_file.close()
+# log3_file.close()
 result_file.write('Max PSNR: '+str(max_psnr)+'\n')
 result_file.write('Best Iteration: '+str(best_iteration)+'\n')
 result_file.write('Max PSNR sm: '+str(max_psnr_sm)+'\n')
@@ -317,7 +350,7 @@ out_np = torch_to_np(out)
 plot_image_grid([np.clip(out_np, 0, 1), img_np], factor=13, plot=PLOT, save_path=file_name+'/%s_denoised.png'%img_name) # save the denoised image
 
 loss_list, frequency_lists, psnr_list, ratio_list = get_log_data(log_path)
-frequency_lists2 = get_log2_data(log2_path)
+frequency_lists2 = get_frequency_data(log2_path)
 
 get_loss_fig(loss_list, num_iter, ylim=0.05, save_path=file_name+'/%s_loss.png'%img_name) # save the loss figure
 

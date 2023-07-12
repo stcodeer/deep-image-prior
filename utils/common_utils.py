@@ -36,6 +36,8 @@ def save2enhanceimg(ori_img, out_img, fn):
     imageio.imwrite(fn, en_img)
 
 def rgb2gray(rgb):
+    if rgb.shape[2] == 1:
+        return rgb[:,:,0]
 
     r, g, b = rgb[:,:,0], rgb[:,:,1], rgb[:,:,2]
     gray = 0.2989 * r + 0.5870 * g + 0.1140 * b

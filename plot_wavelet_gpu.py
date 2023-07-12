@@ -25,8 +25,8 @@ print(X.shape)
 plot(X, 'outputs/F16_GT_before_gpu.png')
 
 # 2D harr wavelet transform
-wave='db7'
-mode='periodization'
+wave = 'db1'
+mode = 'periodization'
 xfm = DWTForward(J=1, wave=wave, mode=mode)
 X = torch.unsqueeze(X, 0)
 cA, cD = xfm(X)
@@ -57,8 +57,9 @@ cD = torch.cat((cH, cV, cD), 1)
 
 cA = torch.unsqueeze(cA, 0)
 cD = torch.unsqueeze(cD, 0)
-print(cA.shape)
-print(cD.shape)
+
+# cD = torch.zeros(cD.shape)
+
 ifm = DWTInverse(wave=wave, mode=mode)
 Y = ifm((cA, [cD]))
 Y = torch.squeeze(Y)

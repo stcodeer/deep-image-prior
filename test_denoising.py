@@ -7,7 +7,7 @@ log_file = open(log_path, "w")
 def denoising(hyperparameters):
     try:
         print('%s' % ('hyperparameters: ' + str(hyperparameters)))
-        os.system(r'python ./denoising.py %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s' %hyperparameters)
+        os.system(r'python ./denoising.py %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s %s' %hyperparameters)
         
     except Exception as e:
         log_file.write('[Error] %s\n' % e)
@@ -22,20 +22,19 @@ def denoising(hyperparameters):
 
 img_name = 'F16_GT'
 
-num_iter = 20000
+num_iter = 20000 # 20000
 
 sigma = 25 # 25, 50
 
-reg_noise_std = 0. # 1./30., 1./20.
+reg_noise_std = 0 # 1./30., 1./20.
 
-show_every = 1000
+show_every = 20000
 
 PLOT = False
 
 NET_TYPE = 'SwinUnet2' # one of skip|ViT|SwinUnet2|Swin2Decoder|iformer_small|iformer_base|iformer_large
 
-# exp_name = '_skip_nopixel_noprenoise_noqkscale'
-exp_name = '_mlp_skip_nopixel_noprenoise_noqkscale'
+exp_name = '_skip_nopixel_noprenoise_noqkscale' # '_skip_nopixel_noprenoise_noqkscale'
 
 wavelet_method = 'None' # 'None', 'haar', 'db5', 'db9', 'db13', 'db25', 'db37' (only enable when SwinUnet2)
 
@@ -49,24 +48,42 @@ depths = 2222 # 2222 (only enable when SwinUnet2)
 
 num_heads = 8888 # 8888 (only enable when SwinUnet2)
 
-core = 'mlp' # 'transformer', 'mlp' (only enable when SwinUnet2)
+core = 'transformer' # 'transformer', 'None', 'multi_head_mlp', 'mlp', 'cnn' ('position-wise mlp', 'cnn1d') (only enable when SwinUnet2)
 
-denoising((
-    img_name,
-    num_iter,
-    sigma,
-    reg_noise_std,
-    show_every,
-    PLOT,
-    NET_TYPE,
-    exp_name,
-    wavelet_method,
-    INPUT,
-    OPTIMIZER,
-    exp_weight,
-    depths,
-    num_heads,
-    core,
-))
+fbc_size = 0.2
+
+feat_scale = False # 'False', 'True' (only enable when SwinUnet2)
+
+attn_scale = False # 'False', 'True' (only enable when SwinUnet2)
+
+for feat_scale in (False, True):
+    for attn_scale in (False, True):
+        
+        exp_name = '_skip_nopixel_noprenoise_noqkscale_tmp'
+        if feat_scale:
+            exp_name = exp_name + 'featscale'
+        if attn_scale:
+            exp_name = exp_name + 'attnscale'
+        
+        denoising((
+            img_name,
+            num_iter,
+            sigma,
+            reg_noise_std,
+            show_every,
+            PLOT,
+            NET_TYPE,
+            exp_name,
+            wavelet_method,
+            INPUT,
+            OPTIMIZER,
+            exp_weight,
+            depths,
+            num_heads,
+            core,
+            fbc_size,
+            feat_scale,
+            attn_scale,
+        ))
 
 log_file.close()
