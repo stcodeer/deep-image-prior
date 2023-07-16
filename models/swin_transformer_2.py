@@ -145,11 +145,11 @@ class WindowAttention(nn.Module):
             attn = self.softmax(attn)
         
         if self.attn_scale == True:
-            attn_d = torch.ones(attn.shape[-2:], device=attn.device) / N    # [l, l]
-            attn_d = attn_d[None, None, ...]                                # [B, N, l, l]
-            attn_h = attn - attn_d                                          # [B, N, l, l]
-            attn_h = attn_h * (1. + self.lamb[None, :, None, None])         # [B, N, l, l]
-            attn = attn_d + attn_h                                          # [B, N, l, l]
+            attn_d = torch.ones(attn.shape[-2:], device=attn.device) / N    # [B, nH, N, N]
+            attn_d = attn_d[None, None, ...]                                # [B, nH, N, N]
+            attn_h = attn - attn_d                                          # [B, nH, N, N]
+            attn_h = attn_h * (1. + self.lamb[None, :, None, None])         # [B, nH, N, N]
+            attn = attn_d + attn_h                                          # [B, nH, N, N]
 
         attn = self.attn_drop(attn)
 
@@ -1052,8 +1052,30 @@ class SwinUnet2(nn.Module):
                                attn_scale=attn_scale,
                                )
 
+        # log_path = 'attnscale.log'
+        # self.log_file = open(log_path, "w")
+
     def forward(self, x):
         if x.size()[1] == 1:
             x = x.repeat(1, 3, 1, 1)
         logits = self.swin_unet(x)
+        
+        # for i in range(4):
+        #     for j in range(2):
+        #         for k in range(8):
+        #             self.log_file.write(str(self.swin_unet.layers[i].blocks[j].attn.lamb[k].item())+' ')
+        #         self.log_file.write('--')
+        #     self.log_file.write('\n')
+            
+        # for i in range(1, 4):
+        #     for j in range(2):
+        #         for k in range(8):
+        #             self.log_file.write(str(self.swin_unet.layers_up[i].blocks[j].attn.lamb[k].item())+' ')
+        #         self.log_file.write('--')
+        #     self.log_file.write('\n')
+            
+        # self.log_file.write('\n')
+            
+        # self.log_file.flush()
+        
         return logits

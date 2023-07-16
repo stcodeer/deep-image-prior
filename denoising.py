@@ -11,11 +11,14 @@ import matplotlib.pyplot as plt
 
 import os
 import numpy as np
-from models import *
+from models import get_net
 from models.ViT import ViT
 from models.swin_transformer_2 import SwinUnet2
 from models.swin_transformer_2_decoder import Swin2Decoder
 from models.inception_transformer import iformer_small, iformer_base, iformer_large
+from models.Generator_TransGAN_church import Generator as TransGAN_church
+from models.Generator_TransGAN_celeba import Generator as TransGAN_celeba
+from models.Generator_ViTGAN import get_architecture as ViTGAN
 
 import torch
 import torch.optim
@@ -30,9 +33,11 @@ torch.backends.cudnn.enabled = True
 torch.backends.cudnn.benchmark =True
 
 # os.environ['CUDA_VISIBLE_DEVICES'] = '-1'  # run on CPU
-# dtype = torch.FloatTensor # run on CPU
 os.environ['CUDA_VISIBLE_DEVICES'] = '0' # run on GPU
-dtype = torch.cuda.FloatTensor # run on GPU
+if os.environ['CUDA_VISIBLE_DEVICES'] == '-1':
+    dtype = torch.FloatTensor
+else:
+    dtype = torch.cuda.FloatTensor
 
 # hyperparameter
 
@@ -208,15 +213,59 @@ if fname == 'data/denoising/F16_GT.png':
         net = locals()[NET_TYPE](in_chans=input_depth, img_size=(img_np.shape[1], img_np.shape[2])).type(dtype)
         
         LR = 5e-5
-    
+        
+    elif 'TransGAN' in NET_TYPE:
+        batch_size = 1 # 100
+        latent_dim = 1024 # 512
+        embed_dim = 256 # 1024
+        window_size = 8 # 16
+        
+        net = locals()[NET_TYPE](
+                        img_size=img_np.shape[1],
+                        in_chans=batch_size,
+                        window_size=window_size,
+                        latent_dim=latent_dim,
+                        embed_dim=embed_dim,
+                        depth=[2, 2, 2, 2, 2, 2],
+                        ).type(dtype)
+        
+        LR = 5e-5
+
+    elif NET_TYPE == 'ViTGAN':
+        num_samples = 1 # img_np.shape[1]
+        token_width = 8 # 8
+        num_layers = 4 # 4
+        embed_dim = 384 # 384
+        use_nerf_proj = False
+        
+        net = ViTGAN(image_size=img_np.shape[1],
+                     token_width=token_width,
+                     num_layers=num_layers,
+                     embed_dim=embed_dim,
+                     use_nerf_proj=use_nerf_proj,
+                     ).type(dtype)
+        
+        LR = 1e-4
+
     else:
         assert False
 
 else:
     assert False
-    
+
+
+# Compute number of parameters
+s  = sum([np.prod(list(p.size())) for p in net.parameters()]); 
+print ('Number of params: %d' % s)
+
+
+# Random Input z
 if 'Decoder' in NET_TYPE:
     net_input = get_noise(input_depth, INPUT, (img_pil.size[1]//32, img_pil.size[0]//32)).type(dtype).detach()
+elif 'TransGAN' in NET_TYPE:
+    net_input = torch.normal(0, 1, (batch_size, latent_dim)).type(dtype).detach()
+elif NET_TYPE == 'ViTGAN':
+    net_input = torch.randn(num_samples, embed_dim).type(dtype).detach()
 else:
     net_input = get_noise(input_depth, INPUT, (img_pil.size[1], img_pil.size[0])).type(dtype).detach()
 
@@ -224,9 +273,6 @@ net_input_np = torch_to_np(net_input)
 # if input_depth == 1 or input_depth == 3:
 #     plot_image_grid([np.clip(net_input_np, 0, 1)], factor=figsize, nrow=1, plot=PLOT, save_path=file_name+'/noise.png')
 
-# Compute number of parameters
-s  = sum([np.prod(list(p.size())) for p in net.parameters()]); 
-print ('Number of params: %d' % s)
 
 # Loss
 mse = torch.nn.MSELoss().type(dtype)
@@ -252,8 +298,9 @@ def closure():
     
     if reg_noise_std > 0:
         net_input = net_input_saved + (noise.normal_() * reg_noise_std)
-    
+
     out = net(net_input)
+    # out = torch.utils.checkpoint.checkpoint_sequential(net, 5, net_input)
     
     if NET_TYPE == 'ViT':
         out = torch.reshape(out, (1, input_depth, img_np.shape[1], img_np.shape[2])) # 放到 ViT 里
@@ -295,7 +342,7 @@ def closure():
     
     # Note that we do not have GT for the "snail" example
     # So 'PSRN_gt', 'PSNR_gt_sm' make no sense
-    print ('Iteration %05d    Loss %f   PSNR_noisy: %f   PSRN_gt: %f PSNR_gt_sm: %f' % (i, total_loss.item(), psrn_noisy, psrn_gt, psrn_gt_sm), '\r', end='')
+    print('Iteration %05d    Loss %f   PSNR_noisy: %f   PSRN_gt: %f PSNR_gt_sm: %f' % (i, total_loss.item(), psrn_noisy, psrn_gt, psrn_gt_sm), '\r', end='')
     log_file.write('Iteration: %05d, Loss: %f, PSRN_gt: %f, mask: %s, ratio: %f\n' % (i, total_loss.item(), psrn_gt, avg_mask_it, ratio_it))
     log2_file.write('%s\n' % (avg_mask_it2))
     # log3_file.write('%s\n' % (avg_mask_it3))
@@ -317,18 +364,18 @@ def closure():
         best_iteration_sm = i
         
     
-    # Backtracking
-    if i % show_every:
-        if psrn_noisy - psrn_noisy_last < -5: 
-            print('Falling back to previous checkpoint.')
+    # # Backtracking
+    # if i % show_every:
+    #     if psrn_noisy - psrn_noisy_last < -5: 
+    #         print('Falling back to previous checkpoint.')
 
-            for new_param, net_param in zip(last_net, net.parameters()):
-                net_param.data.copy_(new_param.cuda())
+    #         for new_param, net_param in zip(last_net, net.parameters()):
+    #             net_param.data.copy_(new_param.cuda())
 
-            return total_loss*0
-        else:
-            last_net = [x.detach().cpu() for x in net.parameters()]
-            psrn_noisy_last = psrn_noisy
+    #         return total_loss*0
+    #     else:
+    #         last_net = [x.detach().cpu() for x in net.parameters()]
+    #         psrn_noisy_last = psrn_noisy
             
     i += 1
 

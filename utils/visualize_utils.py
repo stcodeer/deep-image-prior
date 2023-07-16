@@ -276,30 +276,32 @@ def plot_filtered_figure(img, img_gt, size=0.2, hollow=False, plot=False, save_p
 def plot_fbc_stats(x, ys, nums=(2, 4), lim=-1, title='default', labels='default', plot=False, plotlim=False, save_path='default'):
     
     fig, ax = plt.subplots(figsize=(nums[1]*8, nums[0]*8))
-    
-    if not title == 'default':
-        ax.set_title(title, loc='left')
         
-    c = ['r', 'g', 'b', 'k', 'y', 'c', 'm']
+    c = ['r', 'g', 'b', 'k', 'y', 'c', 'm', 'slategray']
     # ls = ['-.', '-', '.', '--']
     
     for i, y in enumerate(ys):
-        ax = plt.subplot(nums[0], nums[1], i+1)
+        ax = plt.subplot(nums[0], nums[1], 1)
         
         if isinstance(lim, list) or isinstance(lim, tuple):
             ax.set_ylim(lim[0], lim[1])
         elif not lim == -1:
                 ax.set_ylim(0, lim)
+                
+        if not title == 'default' and i == 0:
+            ax.set_title(title, loc='center')
         
         if plotlim:
             y_max = np.max(y)
             y_max_idx = np.argmax(y)
             plt.axhline(y_max, c='r', ls='-.')
             plt.axvline(y_max_idx, c='r', ls='-.')
-            
-        plt.plot(x, y, '.', label=labels[i], c=c[0])
         
-        plt.legend(loc='lower right')
+        if labels == 'default':
+            plt.plot(x, y, c=c[i])
+        else:
+            plt.plot(x, y, label=labels[i], c=c[i])
+            plt.legend(loc='lower right')
         
     
     if not save_path == 'default': 
