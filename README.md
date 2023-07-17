@@ -15,3 +15,5 @@ https://zhuanlan.zhihu.com/p/510252793
 安装 pytorch_wavelets
 
 https://github.com/fbcotter/pytorch_wavelets
+
+安装 torch-dwconv

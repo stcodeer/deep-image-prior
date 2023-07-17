@@ -77,7 +77,7 @@ class TransformerBlock(nn.Module):
 
 class Generator(nn.Module):
     def __init__(self, size=32, token_width=8, num_layers=4,
-                 embed_dim=384, n_mlp=8, channel_multiplier=2, small32=False,
+                 embed_dim=384, cips_dim=512, n_mlp=8, channel_multiplier=2, small32=False,
                  blur_kernel=[1, 3, 3, 1], lr_mlp=0.01, use_nerf_proj=False):
         super().__init__()
         self.size = size
@@ -154,7 +154,7 @@ class Generator(nn.Module):
                 )
             self.to_rgb = ToRGB(out_channel, self.style_dim, upsample=False)
         else:
-            self.cips = CIPSGenerator(size=size//token_width, style_dim=self.style_dim, n_mlp=4)
+            self.cips = CIPSGenerator(size=size//token_width, style_dim=self.style_dim, cips_dim=cips_dim, n_mlp=4)
 
 
     @property
@@ -207,7 +207,7 @@ class Generator(nn.Module):
 
         return x
     
-def get_architecture(image_size, token_width=8, num_layers=4, embed_dim=384, use_nerf_proj=False):
-    generator = Generator(size=image_size, token_width=token_width, num_layers=num_layers, embed_dim=embed_dim, n_mlp=8, small32=True, use_nerf_proj=use_nerf_proj)
+def get_architecture(image_size, token_width=8, num_layers=4, embed_dim=384, cips_dim=512, use_nerf_proj=False):
+    generator = Generator(size=image_size, token_width=token_width, num_layers=num_layers, embed_dim=embed_dim, cips_dim=cips_dim, n_mlp=8, small32=True, use_nerf_proj=use_nerf_proj)
 
     return generator

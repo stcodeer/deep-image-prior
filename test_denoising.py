@@ -22,13 +22,13 @@ def denoising(hyperparameters):
 
 img_name = 'F16_GT'
 
-num_iter = 50000 # 20000
+num_iter = 1000 # 20000
 
 sigma = 25 # 25, 50
 
 reg_noise_std = 0 # 1./30., 1./20.
 
-show_every = 50000
+show_every = 50
 
 PLOT = False
 
@@ -36,9 +36,10 @@ PLOT = False
 # ViT
 # SwinUnet2 | Swin2Decoder
 # iformer_small | iformer_base | iformer_large
+# Uformer_T | Uformer_S | Uformer_B | Uformer_S_noshift | Uformer_B_fastleff
 # TransGAN_church | TransGAN_celeba
 # ViTGAN
-NET_TYPE = 'ViTGAN'
+NET_TYPE = 'Uformer_T'
 
 exp_name = '_' # '_skip_nopixel_noprenoise_noqkscale'
 

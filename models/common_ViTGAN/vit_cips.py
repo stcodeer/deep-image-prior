@@ -161,7 +161,7 @@ class ToRGB(nn.Module):
 
 class CIPSGenerator(nn.Module):
     def __init__(self, size,
-                 style_dim=512, n_mlp=4,
+                 style_dim=512, n_mlp=4, cips_dim=512,
                  blur_kernel=[1, 3, 3, 1], lr_mlp=0.01):
         super().__init__()
         self.size = size
@@ -175,8 +175,8 @@ class CIPSGenerator(nn.Module):
 
         self.style = nn.Sequential(*layers)
         self.channels = {
-            0: 512,
-            1: 512,
+            0: cips_dim,
+            1: cips_dim,
         }
 
         

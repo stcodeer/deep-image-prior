@@ -19,6 +19,7 @@ from models.inception_transformer import iformer_small, iformer_base, iformer_la
 from models.Generator_TransGAN_church import Generator as TransGAN_church
 from models.Generator_TransGAN_celeba import Generator as TransGAN_celeba
 from models.Generator_ViTGAN import get_architecture as ViTGAN
+from models.Uformer import get_arch as Uformer
 
 import torch
 import torch.optim
@@ -214,6 +215,17 @@ if fname == 'data/denoising/F16_GT.png':
         
         LR = 5e-5
         
+    elif 'Uformer' in NET_TYPE:
+        input_depth = 32
+        
+        net = Uformer(NET_TYPE,
+                      img_size=img_np.shape[1],
+                      in_chans=input_depth,
+                      out_chans=img_np.shape[0],
+                      ).type(dtype)
+        
+        LR = 5e-5
+    
     elif 'TransGAN' in NET_TYPE:
         batch_size = 1 # 100
         latent_dim = 1024 # 512
@@ -236,12 +248,14 @@ if fname == 'data/denoising/F16_GT.png':
         token_width = 8 # 8
         num_layers = 4 # 4
         embed_dim = 384 # 384
-        use_nerf_proj = False
+        cips_dim = 256 # 512
+        use_nerf_proj = True
         
         net = ViTGAN(image_size=img_np.shape[1],
                      token_width=token_width,
                      num_layers=num_layers,
                      embed_dim=embed_dim,
+                     cips_dim=cips_dim,
                      use_nerf_proj=use_nerf_proj,
                      ).type(dtype)
         
