@@ -22,7 +22,7 @@ X = torch.tensor(img_noisy_np)
 print(X.shape)
 
 # x_before
-plot(X, 'outputs/F16_GT_before_gpu.png')
+plot(X, 'outputs/figs_wavelet/F16_GT_before_gpu.png')
 
 # 2D harr wavelet transform
 wave = 'db1'
@@ -41,13 +41,13 @@ cD = torch.squeeze(cD)
 
 
 # average 
-plot(cA, 'outputs/F16_GT_average_gpu.png')
+plot(cA, 'outputs/figs_wavelet/F16_GT_average_gpu.png')
 # horizontal
-plot(cH, 'outputs/F16_GT_horizontal_gpu.png')
+plot(cH, 'outputs/figs_wavelet/F16_GT_horizontal_gpu.png')
 # vertical
-plot(cV, 'outputs/F16_GT_vertical_gpu.png')
+plot(cV, 'outputs/figs_wavelet/F16_GT_vertical_gpu.png')
 # diagonal
-plot(cD, 'outputs/F16_GT_diagonal_gpu.png')
+plot(cD, 'outputs/figs_wavelet/F16_GT_diagonal_gpu.png')
 
 # 2D harr inverse wavelet transform
 cH = torch.unsqueeze(cH, 1)
@@ -66,4 +66,4 @@ Y = torch.squeeze(Y)
 print(Y.shape)
 
 # x_before
-plot(Y, 'outputs/F16_GT_after_gpu.png')
+plot(Y, 'outputs/figs_wavelet/F16_GT_after_gpu.png')
